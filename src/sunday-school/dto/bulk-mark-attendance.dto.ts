@@ -1,5 +1,11 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsEnum, IsUUID, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsEnum,
+  IsUUID,
+  ValidateNested,
+} from 'class-validator';
 import { SundaySchoolAttendanceStatus } from '../enums/sunday-school-attendance-status.enum';
 
 export class AttendanceEntryDto {
@@ -12,6 +18,7 @@ export class AttendanceEntryDto {
 
 export class BulkMarkAttendanceDto {
   @IsArray()
+  @ArrayMaxSize(500)
   @ValidateNested({ each: true })
   @Type(() => AttendanceEntryDto)
   attendances: AttendanceEntryDto[];

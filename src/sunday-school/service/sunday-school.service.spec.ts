@@ -2,9 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { QueryFailedError } from 'typeorm';
 import { SundaySchoolService } from './sunday-school.service';
 import { SundaySchoolClass } from '../entity/sunday-school-class.entity';
 import { SundaySchoolMember } from '../entity/sunday-school-member.entity';
@@ -26,6 +28,15 @@ const mockClassRepo = {
   remove: jest.fn(),
 };
 
+const mockMembersCountQueryBuilder = {
+  innerJoin: jest.fn().mockReturnThis(),
+  select: jest.fn().mockReturnThis(),
+  addSelect: jest.fn().mockReturnThis(),
+  where: jest.fn().mockReturnThis(),
+  groupBy: jest.fn().mockReturnThis(),
+  getRawMany: jest.fn().mockResolvedValue([]),
+};
+
 const mockMemberAssignRepo = {
   create: jest.fn(),
   save: jest.fn(),
@@ -34,6 +45,7 @@ const mockMemberAssignRepo = {
   find: jest.fn(),
   remove: jest.fn(),
   count: jest.fn().mockResolvedValue(0),
+  createQueryBuilder: jest.fn().mockReturnValue(mockMembersCountQueryBuilder),
 };
 
 const mockSessionRepo = {
@@ -106,6 +118,16 @@ describe('SundaySchoolService', () => {
 
   beforeEach(async () => {
     jest.resetAllMocks();
+
+    mockMembersCountQueryBuilder.innerJoin.mockReturnThis();
+    mockMembersCountQueryBuilder.select.mockReturnThis();
+    mockMembersCountQueryBuilder.addSelect.mockReturnThis();
+    mockMembersCountQueryBuilder.where.mockReturnThis();
+    mockMembersCountQueryBuilder.groupBy.mockReturnThis();
+    mockMembersCountQueryBuilder.getRawMany.mockResolvedValue([]);
+    mockMemberAssignRepo.createQueryBuilder.mockReturnValue(
+      mockMembersCountQueryBuilder,
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -262,6 +284,7 @@ describe('SundaySchoolService', () => {
 
     it('should set teacher reference when teacherId is provided', async () => {
       const dto = { name: 'Intermediates', teacherId: 'member-99' };
+      mockMemberRepo.existsBy.mockResolvedValue(true);
       mockClassRepo.create.mockReturnValue({ ...dto });
       mockClassRepo.save.mockResolvedValue({ id: 'class-2', ...dto });
 
@@ -270,6 +293,28 @@ describe('SundaySchoolService', () => {
       expect(mockClassRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ teacher: { id: 'member-99' } }),
       );
+    });
+
+    it('should throw NotFoundException when teacherId does not reference a real member', async () => {
+      mockMemberRepo.existsBy.mockResolvedValue(false);
+
+      await expect(
+        service.createClass(ssWorkerUser, {
+          name: 'Intermediates',
+          teacherId: 'ghost-member',
+        } as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockClassRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('new class starts with membersCount 0', async () => {
+      const dto = { name: 'Beginners' };
+      mockClassRepo.create.mockReturnValue({ ...dto, teacher: null });
+      mockClassRepo.save.mockResolvedValue({ id: 'class-1', ...dto });
+
+      const result = await service.createClass(ssWorkerUser, dto as any);
+
+      expect(result.membersCount).toBe(0);
     });
   });
 
@@ -297,6 +342,7 @@ describe('SundaySchoolService', () => {
       };
       mockClassRepo.findOne.mockResolvedValue(entity);
       mockClassRepo.save.mockImplementation((e) => Promise.resolve(e));
+      mockMemberRepo.existsBy.mockResolvedValue(true);
 
       const result = await service.updateClass(adminUser, 'class-1', {
         name: 'New',
@@ -305,6 +351,15 @@ describe('SundaySchoolService', () => {
 
       expect(result.name).toBe('New');
       expect(result.teacher).toEqual({ id: 'member-5' });
+    });
+
+    it('should throw NotFoundException when the new teacherId does not reference a real member', async () => {
+      mockMemberRepo.existsBy.mockResolvedValue(false);
+
+      await expect(
+        service.updateClass(adminUser, 'class-1', { teacherId: 'ghost' }),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockClassRepo.save).not.toHaveBeenCalled();
     });
   });
 
@@ -339,6 +394,26 @@ describe('SundaySchoolService', () => {
 
       expect(result.data).toHaveLength(1);
       expect(result.totalCount).toBe(1);
+    });
+
+    it('attaches the real membersCount from the grouped query', async () => {
+      mockClassRepo.findAndCount.mockResolvedValue([[mockClass], 1]);
+      mockMembersCountQueryBuilder.getRawMany.mockResolvedValue([
+        { classId: 'class-1', count: '3' },
+      ]);
+
+      const result = await service.getAllClasses(1, 20);
+
+      expect(result.data[0].membersCount).toBe(3);
+    });
+
+    it('defaults membersCount to 0 for a class with no assignments', async () => {
+      mockClassRepo.findAndCount.mockResolvedValue([[mockClass], 1]);
+      mockMembersCountQueryBuilder.getRawMany.mockResolvedValue([]);
+
+      const result = await service.getAllClasses(1, 20);
+
+      expect(result.data[0].membersCount).toBe(0);
     });
   });
 
@@ -469,6 +544,7 @@ describe('SundaySchoolService', () => {
       });
 
       expect(result.selfMarkClosesAt).toBeNull();
+      expect(result.selfMarkOpen).toBe(false);
     });
 
     it('should throw ForbiddenException for unauthorized worker', async () => {
@@ -481,6 +557,26 @@ describe('SundaySchoolService', () => {
           sessionDate: '2026-06-08',
         }),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should turn a concurrent unique-violation into a friendly ConflictException', async () => {
+      mockClassRepo.findOne.mockResolvedValue(mockClass);
+      mockSessionRepo.findOne.mockResolvedValue(null); // pre-check race: passes
+      mockSessionRepo.create.mockReturnValue({
+        sessionDate: '2026-06-08',
+        sundaySchoolClass: mockClass,
+      });
+      const dbError = Object.assign(Object.create(QueryFailedError.prototype), {
+        driverError: { code: '23505' },
+      });
+      mockSessionRepo.save.mockRejectedValue(dbError);
+
+      await expect(
+        service.createSession(ssWorkerUser, {
+          classId: 'class-1',
+          sessionDate: '2026-06-08',
+        }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 
@@ -518,6 +614,7 @@ describe('SundaySchoolService', () => {
         before.getTime() + 29 * 60 * 1000,
       );
       expect(closesAtMs).toBeLessThanOrEqual(after.getTime() + 31 * 60 * 1000);
+      expect(result.selfMarkOpen).toBe(true);
     });
   });
 
@@ -546,6 +643,7 @@ describe('SundaySchoolService', () => {
       const result = await service.closeSelfMark(ssWorkerUser, 'session-1');
 
       expect(result.selfMarkClosesAt).toBeNull();
+      expect(result.selfMarkOpen).toBe(false);
     });
   });
 
@@ -593,21 +691,28 @@ describe('SundaySchoolService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('should update existing ABSENT record to PRESENT', async () => {
+    it('should update existing ABSENT record to PRESENT and refresh markedAt', async () => {
       mockSessionRepo.findOne.mockResolvedValue(mockSession);
       mockMemberAssignRepo.findOne.mockResolvedValue({ id: 'assign-1' });
+      const staleMarkedAt = new Date('2020-01-01T00:00:00Z');
       const existingAtt = {
         id: 'att-1',
         status: SundaySchoolAttendanceStatus.ABSENT,
         markedByTeacher: true,
+        markedAt: staleMarkedAt,
       };
       mockAttendanceRepo.findOne.mockResolvedValue(existingAtt);
       mockAttendanceRepo.save.mockImplementation((e) => Promise.resolve(e));
 
+      const before = new Date();
       const result = await service.selfMarkPresent(memberUser, 'session-1');
 
       expect(result.status).toBe(SundaySchoolAttendanceStatus.PRESENT);
       expect(result.markedByTeacher).toBe(false);
+      expect(result.markedAt.getTime()).toBeGreaterThanOrEqual(
+        before.getTime(),
+      );
+      expect(result.markedAt).not.toEqual(staleMarkedAt);
     });
 
     it('should create new PRESENT attendance record', async () => {
@@ -750,12 +855,14 @@ describe('SundaySchoolService', () => {
       expect(mockTx.save).not.toHaveBeenCalled();
     });
 
-    it('should update existing attendance records', async () => {
+    it('should update existing attendance records and refresh markedAt', async () => {
       mockSessionRepo.findOne.mockResolvedValue(mockSession);
+      const staleMarkedAt = new Date('2020-01-01T00:00:00Z');
       const existing = {
         id: 'att-1',
         status: SundaySchoolAttendanceStatus.ABSENT,
         markedByTeacher: false,
+        markedAt: staleMarkedAt,
         member: { id: 'member-1' },
       };
       const mockTx = {
@@ -773,6 +880,7 @@ describe('SundaySchoolService', () => {
         async (cb: (em: typeof mockTx) => Promise<unknown>) => cb(mockTx),
       );
 
+      const before = new Date();
       const result = await service.bulkMarkAttendance(
         ssWorkerUser,
         'session-1',
@@ -789,6 +897,10 @@ describe('SundaySchoolService', () => {
       expect(result).toHaveLength(1);
       expect(result[0].status).toBe(SundaySchoolAttendanceStatus.PRESENT);
       expect(result[0].markedByTeacher).toBe(true);
+      expect(result[0].markedAt.getTime()).toBeGreaterThanOrEqual(
+        before.getTime(),
+      );
+      expect(result[0].markedAt).not.toEqual(staleMarkedAt);
     });
 
     it('should throw ForbiddenException for unauthorized worker', async () => {

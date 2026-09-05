@@ -4902,6 +4902,35 @@ actionable (and re-throwing `BadRequestException` on a second tap) after a refet
 the existing record is `ABSENT`/`EXCUSED` (a teacher's pre-mark being self-corrected) — only an existing `PRESENT`
 record sets the flag.
 
+**Computed fields on class/session responses (added 2026-09-05, audit fix):** `SundaySchoolClass` isn't stored with a
+member count, and `SundaySchoolSession` isn't stored with an open/closed status — both are computed at read time
+rather than persisted, so they can't drift from the actual assignment rows / `selfMarkClosesAt` value:
+- **`membersCount`** — attached to every class returned by `GET /sunday-school/classes`, `GET /admin/sunday-school/classes`,
+  and class create/update, via a single grouped `COUNT(*)` query across all requested classes (not N+1). A brand-new
+  class always reports `0` without a query.
+- **`selfMarkOpen`** — attached to every session returned by the sessions-list and single-session routes (both worker
+  and admin controllers), computed the same way `getSessionRoster` already computed `selfMarkOpen` internally:
+  `!!selfMarkClosesAt && now < selfMarkClosesAt`. `discuva-admin`'s sessions table previously tracked open/closed via
+  a client-only `status` field that the API never actually returned, which only reflected reality immediately after
+  that same browser tab called Open/Close — a fresh page load showed every session as closed regardless of its real
+  state. The frontend now reads `selfMarkOpen` directly off the API response.
+
+**`markedAt` refreshes on re-mark (fixed 2026-09-05, audit fix):** `SundaySchoolAttendance.markedAt` used to only be
+set once, at INSERT — re-marking an existing record (a member self-correcting a teacher's earlier `ABSENT` mark via
+`selfMarkPresent`, or a teacher overwriting a status via `bulkMarkAttendance`/`adminBulkMarkAttendance`) updated
+`status`/`markedByTeacher` but left `markedAt` frozen at the original mark time. Since `getMyAttendanceHistory` sorts
+by `markedAt DESC`, a corrected record could display a stale timestamp and sort out of chronological order. All three
+re-mark paths now set `markedAt = new Date()` when overwriting an existing record.
+
+**Class create/update now validates `teacherId` (fixed 2026-09-05, audit fix):** `createClass`/`updateClass` and their
+admin equivalents previously set the `teacher` relation from a raw `teacherId` with no existence check (unlike
+`assignMember`, which already validated the member exists) — an invalid id surfaced only as a raw FK-constraint 500.
+Both now throw a clean `NotFoundException('Teacher not found')` up front.
+
+**Session-creation race hardened (fixed 2026-09-05, audit fix):** `createSession`/`adminCreateSession` check-then-insert
+against the DB's `(class, sessionDate)` unique constraint; a genuine race between two concurrent creates for the same
+class+date now surfaces the same friendly `ConflictException` message instead of a raw Postgres `23505` error.
+
 **Lesson material (`SundaySchoolSession.documentUrl`):** optional link to that date's lesson material (Google Drive,
 PDF link, etc.) — validated as a URL (`@IsUrl()`), settable only at session creation (`POST .../sessions`), same as
 the pre-existing `notes` field — neither has an update-after-creation route. Set via either the worker/teacher
