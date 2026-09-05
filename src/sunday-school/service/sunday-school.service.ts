@@ -406,22 +406,49 @@ export class SundaySchoolService {
     };
   }
 
+  // `alreadyCheckedIn` is a per-member computed field, not on the entity
+  // itself — a session stays "open" (selfMarkClosesAt in the future) for
+  // every member in the class regardless of whether THIS member has already
+  // self-marked PRESENT for it, so the member app can't tell them apart
+  // without this. Without it, a member who checks in and later re-opens the
+  // tab (or the periodic refetch fires again) sees the exact same session
+  // looking freshly actionable, and a second tap throws (selfMarkPresent()
+  // rejects a duplicate PRESENT mark) instead of the button simply already
+  // reading "Checked In".
   async getOpenSessionsForMember(
     user: MemberAuth,
-  ): Promise<SundaySchoolSession[]> {
+  ): Promise<(SundaySchoolSession & { alreadyCheckedIn: boolean })[]> {
     const assignments = await this.memberAssignRepo.find({
       where: { member: { id: user.id } },
       relations: ['sundaySchoolClass'],
     });
     if (assignments.length === 0) return [];
     const classIds = assignments.map((a) => a.sundaySchoolClass.id);
-    return this.sessionRepo.find({
+    const sessions = await this.sessionRepo.find({
       where: {
         sundaySchoolClass: { id: In(classIds) },
         selfMarkClosesAt: MoreThan(new Date()),
       },
       relations: ['sundaySchoolClass'],
     });
+    if (sessions.length === 0) return [];
+
+    const presentAttendances = await this.attendanceRepo.find({
+      where: {
+        session: { id: In(sessions.map((s) => s.id)) },
+        member: { id: user.id },
+        status: SundaySchoolAttendanceStatus.PRESENT,
+      },
+      relations: ['session'],
+    });
+    const presentSessionIds = new Set(
+      presentAttendances.map((a) => a.session.id),
+    );
+
+    return sessions.map((session) => ({
+      ...session,
+      alreadyCheckedIn: presentSessionIds.has(session.id),
+    }));
   }
 
   async bulkMarkAttendance(

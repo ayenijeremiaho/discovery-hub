@@ -4894,6 +4894,14 @@ a staff member has opened the window on the session.
 - Bulk marking is used by teachers/staff; self-mark (`POST /sunday-school/sessions/:id/checkin`) is used by individual
   members.
 
+**Open sessions for member (`GET /sunday-school/sessions/open`):** each returned session carries a computed
+`alreadyCheckedIn: boolean` — true if the calling member already has a `PRESENT` attendance record for that session.
+A session stays "open" for the whole class regardless of whether this particular member has self-marked yet, so the
+flag is what lets the member app grey out the Check In button and show "Checked In" instead of leaving it looking
+actionable (and re-throwing `BadRequestException` on a second tap) after a refetch. Re-marking is still allowed when
+the existing record is `ABSENT`/`EXCUSED` (a teacher's pre-mark being self-corrected) — only an existing `PRESENT`
+record sets the flag.
+
 **Lesson material (`SundaySchoolSession.documentUrl`):** optional link to that date's lesson material (Google Drive,
 PDF link, etc.) — validated as a URL (`@IsUrl()`), settable only at session creation (`POST .../sessions`), same as
 the pre-existing `notes` field — neither has an update-after-creation route. Set via either the worker/teacher

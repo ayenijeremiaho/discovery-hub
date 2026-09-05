@@ -40,6 +40,7 @@ const mockSessionRepo = {
   create: jest.fn(),
   save: jest.fn(),
   findOne: jest.fn(),
+  find: jest.fn(),
   count: jest.fn().mockResolvedValue(0),
 };
 
@@ -630,6 +631,77 @@ describe('SundaySchoolService', () => {
         }),
       );
       expect(result.status).toBe(SundaySchoolAttendanceStatus.PRESENT);
+    });
+  });
+
+  // ─── getOpenSessionsForMember ─────────────────────────────────────────────
+
+  describe('getOpenSessionsForMember', () => {
+    it('returns an empty array when the member has no class assignments', async () => {
+      mockMemberAssignRepo.find.mockResolvedValue([]);
+
+      const result = await service.getOpenSessionsForMember(memberUser);
+
+      expect(result).toEqual([]);
+      expect(mockSessionRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('flags a session the member has already self-marked PRESENT for', async () => {
+      mockMemberAssignRepo.find.mockResolvedValue([
+        { sundaySchoolClass: { id: 'class-1' } },
+      ]);
+      mockSessionRepo.find.mockResolvedValue([
+        { id: 'session-1', sundaySchoolClass: { id: 'class-1' } },
+        { id: 'session-2', sundaySchoolClass: { id: 'class-1' } },
+      ]);
+      mockAttendanceRepo.find.mockResolvedValue([
+        { session: { id: 'session-1' } },
+      ]);
+
+      const result = await service.getOpenSessionsForMember(memberUser);
+
+      expect(result).toEqual([
+        expect.objectContaining({ id: 'session-1', alreadyCheckedIn: true }),
+        expect.objectContaining({ id: 'session-2', alreadyCheckedIn: false }),
+      ]);
+      expect(mockAttendanceRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: SundaySchoolAttendanceStatus.PRESENT,
+          }),
+        }),
+      );
+    });
+
+    it('does not flag a session where the existing record is ABSENT/EXCUSED, not PRESENT', async () => {
+      // selfMarkPresent() itself allows overwriting a non-PRESENT record —
+      // only an existing PRESENT record blocks a second check-in — so the
+      // "already checked in" flag must track that exact same distinction.
+      mockMemberAssignRepo.find.mockResolvedValue([
+        { sundaySchoolClass: { id: 'class-1' } },
+      ]);
+      mockSessionRepo.find.mockResolvedValue([
+        { id: 'session-1', sundaySchoolClass: { id: 'class-1' } },
+      ]);
+      mockAttendanceRepo.find.mockResolvedValue([]);
+
+      const result = await service.getOpenSessionsForMember(memberUser);
+
+      expect(result).toEqual([
+        expect.objectContaining({ id: 'session-1', alreadyCheckedIn: false }),
+      ]);
+    });
+
+    it('skips the attendance lookup entirely when there are no open sessions', async () => {
+      mockMemberAssignRepo.find.mockResolvedValue([
+        { sundaySchoolClass: { id: 'class-1' } },
+      ]);
+      mockSessionRepo.find.mockResolvedValue([]);
+
+      const result = await service.getOpenSessionsForMember(memberUser);
+
+      expect(result).toEqual([]);
+      expect(mockAttendanceRepo.find).not.toHaveBeenCalled();
     });
   });
 
