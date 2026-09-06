@@ -5,8 +5,18 @@ import { DepartmentAccessService } from './department-access.service';
 import { WorkerProfile } from '../../member/entity/worker-profile.entity';
 import { DepartmentCapability } from '../enums/department-capability.enum';
 
+const mockQueryBuilder = {
+  select: jest.fn().mockReturnThis(),
+  innerJoin: jest.fn().mockReturnThis(),
+  leftJoin: jest.fn().mockReturnThis(),
+  where: jest.fn().mockReturnThis(),
+  andWhere: jest.fn().mockReturnThis(),
+  getRawMany: jest.fn(),
+};
+
 const mockWorkerProfileRepo = {
   findOne: jest.fn(),
+  createQueryBuilder: jest.fn(() => mockQueryBuilder),
 };
 
 describe('DepartmentAccessService', () => {
@@ -138,6 +148,35 @@ describe('DepartmentAccessService', () => {
           'Custom denial message',
         ),
       ).rejects.toThrow(new ForbiddenException('Custom denial message'));
+    });
+  });
+
+  describe('findMemberIdsWithCapability', () => {
+    it('returns the member ids from the raw query result', async () => {
+      mockQueryBuilder.getRawMany.mockResolvedValue([
+        { memberId: 'member-1' },
+        { memberId: 'member-2' },
+      ]);
+
+      const result = await service.findMemberIdsWithCapability(
+        DepartmentCapability.MANAGE_SUNDAY_SCHOOL,
+      );
+
+      expect(result).toEqual(['member-1', 'member-2']);
+      expect(mockQueryBuilder.where).toHaveBeenCalledWith(
+        expect.stringContaining('ANY(d.capabilities)'),
+        { cap: DepartmentCapability.MANAGE_SUNDAY_SCHOOL },
+      );
+    });
+
+    it('returns an empty array when nobody has the capability', async () => {
+      mockQueryBuilder.getRawMany.mockResolvedValue([]);
+
+      const result = await service.findMemberIdsWithCapability(
+        DepartmentCapability.MANAGE_SUNDAY_SCHOOL,
+      );
+
+      expect(result).toEqual([]);
     });
   });
 });

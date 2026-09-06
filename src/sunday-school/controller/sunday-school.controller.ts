@@ -26,6 +26,10 @@ import {
   OpenSelfMarkDto,
 } from '../dto/create-sunday-school-session.dto';
 import { BulkMarkAttendanceDto } from '../dto/bulk-mark-attendance.dto';
+import {
+  AskQuestionDto,
+  AnswerQuestionDto,
+} from '../dto/sunday-school-question.dto';
 import { AdminGuard } from '../../admin/guard/admin.guard';
 import { RequiresPermission } from '../../admin/decorator/requires-permission.decorator';
 import { AdminPermission } from '../../admin/enum/admin-permission.enum';
@@ -111,6 +115,60 @@ export class SundaySchoolController {
     @Query('limit') limit = 20,
   ) {
     return this.sundaySchoolService.getClassMembers(classId, +page, +limit);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('my-classes')
+  async getMyClasses(@Request() req: any) {
+    return this.sundaySchoolService.getMyClasses(req.user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('classes/:id/questions')
+  async askQuestion(
+    @Request() req: any,
+    @Param('id', ParseUUIDPipe) classId: string,
+    @Body() dto: AskQuestionDto,
+  ) {
+    return this.sundaySchoolService.askQuestion(req.user, classId, dto);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(MemberRoleEnum.WORKER)
+  @Get('classes/:id/questions')
+  async getQuestionsForClass(
+    @Request() req: any,
+    @Param('id', ParseUUIDPipe) classId: string,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.sundaySchoolService.getQuestionsForClass(
+      req.user,
+      classId,
+      +page,
+      +limit,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('questions/me')
+  async getMyQuestions(
+    @Request() req: any,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.sundaySchoolService.getMyQuestions(req.user, +page, +limit);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(MemberRoleEnum.WORKER)
+  @Patch('questions/:id/answer')
+  async answerQuestion(
+    @Request() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AnswerQuestionDto,
+  ) {
+    return this.sundaySchoolService.answerQuestion(req.user, id, dto);
   }
 
   @UseGuards(RolesGuard)

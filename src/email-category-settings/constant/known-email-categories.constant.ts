@@ -89,4 +89,9 @@ export const KNOWN_EMAIL_CATEGORIES: Record<EmailCategory, KnownEmailCategory> =
       description:
         'Sent to admins with Forms access when a member or public submission comes in, for forms with this turned on.',
     },
+    [EmailCategory.SUNDAY_SCHOOL_QA]: {
+      label: 'Sunday School Q&A',
+      description:
+        'Sent when a student asks a Sunday School question and when a teacher answers it.',
+    },
   };

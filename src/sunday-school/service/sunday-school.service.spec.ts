@@ -12,12 +12,14 @@ import { SundaySchoolClass } from '../entity/sunday-school-class.entity';
 import { SundaySchoolMember } from '../entity/sunday-school-member.entity';
 import { SundaySchoolSession } from '../entity/sunday-school-session.entity';
 import { SundaySchoolAttendance } from '../entity/sunday-school-attendance.entity';
+import { SundaySchoolQuestion } from '../entity/sunday-school-question.entity';
 import { SundaySchoolAttendanceStatus } from '../enums/sunday-school-attendance-status.enum';
 import { Member } from '../../member/entity/member.entity';
 import { MemberRoleEnum } from '../../member/enums/member-role.enum';
 import { DepartmentCapability } from '../../department/enums/department-capability.enum';
 import { DepartmentAccessService } from '../../department/service/department-access.service';
 import { CacheService } from '../../utility/service/cache.service';
+import { NotificationDispatchService } from '../../utility/service/notification-dispatch.service';
 import { SessionSurface } from '../../auth/enum/session-surface.enum';
 
 const mockClassRepo = {
@@ -68,11 +70,25 @@ const mockAttendanceRepo = {
 
 const mockMemberRepo = {
   existsBy: jest.fn(),
+  findOne: jest.fn(),
+};
+
+const mockQuestionRepo = {
+  create: jest.fn(),
+  save: jest.fn(),
+  findOne: jest.fn(),
+  findAndCount: jest.fn(),
+  remove: jest.fn(),
 };
 
 const mockDepartmentAccessService = {
   hasCapability: jest.fn(),
   assertHasCapability: jest.fn(),
+  findMemberIdsWithCapability: jest.fn().mockResolvedValue([]),
+};
+
+const mockNotificationDispatchService = {
+  notifyMember: jest.fn().mockResolvedValue(undefined),
 };
 
 const adminUser = {
@@ -128,6 +144,10 @@ describe('SundaySchoolService', () => {
     mockMemberAssignRepo.createQueryBuilder.mockReturnValue(
       mockMembersCountQueryBuilder,
     );
+    mockDepartmentAccessService.findMemberIdsWithCapability.mockResolvedValue(
+      [],
+    );
+    mockNotificationDispatchService.notifyMember.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -150,8 +170,16 @@ describe('SundaySchoolService', () => {
         },
         { provide: getRepositoryToken(Member), useValue: mockMemberRepo },
         {
+          provide: getRepositoryToken(SundaySchoolQuestion),
+          useValue: mockQuestionRepo,
+        },
+        {
           provide: DepartmentAccessService,
           useValue: mockDepartmentAccessService,
+        },
+        {
+          provide: NotificationDispatchService,
+          useValue: mockNotificationDispatchService,
         },
         {
           provide: CacheService,
@@ -969,6 +997,341 @@ describe('SundaySchoolService', () => {
       expect(result.sessionDate).toBe('2026-06-08');
       expect(result.selfMarkOpen).toBe(true);
       expect(result.classId).toBe('class-1');
+    });
+  });
+
+  // ─── getMyClasses ─────────────────────────────────────────────────────────
+
+  describe('getMyClasses', () => {
+    it('returns the classes the member is assigned to', async () => {
+      mockMemberAssignRepo.find.mockResolvedValue([
+        { sundaySchoolClass: mockClass },
+        { sundaySchoolClass: { id: 'class-2', name: 'Teens' } },
+      ]);
+
+      const result = await service.getMyClasses(memberUser);
+
+      expect(result).toEqual([mockClass, { id: 'class-2', name: 'Teens' }]);
+    });
+  });
+
+  // ─── askQuestion ──────────────────────────────────────────────────────────
+
+  describe('askQuestion', () => {
+    it('should throw NotFoundException when class not found', async () => {
+      mockClassRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.askQuestion(memberUser, 'bad-id', {
+          questionText: 'Why?',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException when member is not assigned to the class', async () => {
+      mockClassRepo.findOne.mockResolvedValue(mockClass);
+      mockMemberAssignRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.askQuestion(memberUser, 'class-1', {
+          questionText: 'Why?',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('notifies just the assigned teacher (email + push) when one exists', async () => {
+      mockClassRepo.findOne.mockResolvedValue(mockClass); // teacher: { id: 'ss-worker-1' }
+      mockMemberAssignRepo.findOne.mockResolvedValue({ id: 'assign-1' });
+      const question = {
+        id: 'q-1',
+        questionText: 'Why?',
+        sundaySchoolClass: mockClass,
+      };
+      mockQuestionRepo.create.mockReturnValue(question);
+      mockQuestionRepo.save.mockResolvedValue(question);
+      mockMemberRepo.findOne.mockImplementation(({ where: { id } }) => {
+        if (id === memberUser.id)
+          return Promise.resolve({
+            id: memberUser.id,
+            firstname: 'Jane',
+            lastname: 'Doe',
+          });
+        if (id === 'ss-worker-1')
+          return Promise.resolve({
+            id: 'ss-worker-1',
+            firstname: 'Teacher',
+            lastname: 'Tom',
+            email: 'teacher@example.com',
+          });
+        return Promise.resolve(null);
+      });
+
+      const result = await service.askQuestion(memberUser, 'class-1', {
+        questionText: 'Why?',
+      });
+
+      expect(result).toBe(question);
+      expect(mockNotificationDispatchService.notifyMember).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: expect.objectContaining({ to: 'teacher@example.com' }),
+          push: expect.objectContaining({ memberIds: ['ss-worker-1'] }),
+        }),
+      );
+      expect(
+        mockDepartmentAccessService.findMemberIdsWithCapability,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('falls back to notifying every SS-capability worker (push only) when no teacher is assigned', async () => {
+      const classWithoutTeacher = {
+        id: 'class-1',
+        name: 'Beginners',
+        teacher: null,
+      };
+      mockClassRepo.findOne.mockResolvedValue(classWithoutTeacher);
+      mockMemberAssignRepo.findOne.mockResolvedValue({ id: 'assign-1' });
+      const question = {
+        id: 'q-1',
+        questionText: 'Why?',
+        sundaySchoolClass: classWithoutTeacher,
+      };
+      mockQuestionRepo.create.mockReturnValue(question);
+      mockQuestionRepo.save.mockResolvedValue(question);
+      mockMemberRepo.findOne.mockResolvedValue({
+        id: memberUser.id,
+        firstname: 'Jane',
+        lastname: 'Doe',
+      });
+      mockDepartmentAccessService.findMemberIdsWithCapability.mockResolvedValue(
+        ['staff-1', 'staff-2'],
+      );
+
+      await service.askQuestion(memberUser, 'class-1', {
+        questionText: 'Why?',
+      });
+
+      expect(
+        mockDepartmentAccessService.findMemberIdsWithCapability,
+      ).toHaveBeenCalledWith(DepartmentCapability.MANAGE_SUNDAY_SCHOOL);
+      const call =
+        mockNotificationDispatchService.notifyMember.mock.calls[0][0];
+      expect(call.email).toBeUndefined();
+      expect(call.push).toEqual(
+        expect.objectContaining({ memberIds: ['staff-1', 'staff-2'] }),
+      );
+    });
+
+    it('does not notify anyone when there is no teacher and no SS-capability staff', async () => {
+      const classWithoutTeacher = {
+        id: 'class-1',
+        name: 'Beginners',
+        teacher: null,
+      };
+      mockClassRepo.findOne.mockResolvedValue(classWithoutTeacher);
+      mockMemberAssignRepo.findOne.mockResolvedValue({ id: 'assign-1' });
+      const question = { id: 'q-1', questionText: 'Why?' };
+      mockQuestionRepo.create.mockReturnValue(question);
+      mockQuestionRepo.save.mockResolvedValue(question);
+      mockMemberRepo.findOne.mockResolvedValue({ id: memberUser.id });
+      mockDepartmentAccessService.findMemberIdsWithCapability.mockResolvedValue(
+        [],
+      );
+
+      await service.askQuestion(memberUser, 'class-1', {
+        questionText: 'Why?',
+      });
+
+      expect(
+        mockNotificationDispatchService.notifyMember,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── getMyQuestions ───────────────────────────────────────────────────────
+
+  describe('getMyQuestions', () => {
+    it('returns the member’s own questions, paginated', async () => {
+      mockQuestionRepo.findAndCount.mockResolvedValue([[{ id: 'q-1' }], 1]);
+
+      const result = await service.getMyQuestions(memberUser, 1, 20);
+
+      expect(result.data).toHaveLength(1);
+      expect(result.totalCount).toBe(1);
+      expect(mockQuestionRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { askedBy: { id: memberUser.id } },
+        }),
+      );
+    });
+  });
+
+  // ─── getQuestionsForClass ─────────────────────────────────────────────────
+
+  describe('getQuestionsForClass', () => {
+    it('should throw NotFoundException when class not found', async () => {
+      mockClassRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getQuestionsForClass(ssWorkerUser, 'bad-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException for unauthorized worker', async () => {
+      // First call is the "class exists" check, second is isClassTeacher's
+      // internal lookup — must differ so an unrelated worker isn't
+      // accidentally treated as the teacher by a single blanket mock.
+      mockClassRepo.findOne
+        .mockResolvedValueOnce(mockClass)
+        .mockResolvedValueOnce(null);
+      mockDepartmentAccessService.hasCapability.mockResolvedValue(false);
+
+      await expect(
+        service.getQuestionsForClass(otherWorkerUser, 'class-1'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('returns paginated questions for an authorized worker', async () => {
+      mockClassRepo.findOne.mockResolvedValue(mockClass);
+      mockDepartmentAccessService.hasCapability.mockResolvedValue(true);
+      mockQuestionRepo.findAndCount.mockResolvedValue([[{ id: 'q-1' }], 1]);
+
+      const result = await service.getQuestionsForClass(
+        ssWorkerUser,
+        'class-1',
+      );
+
+      expect(result.data).toHaveLength(1);
+    });
+  });
+
+  // ─── answerQuestion ───────────────────────────────────────────────────────
+
+  describe('answerQuestion', () => {
+    it('should throw NotFoundException when question not found', async () => {
+      mockQuestionRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.answerQuestion(ssWorkerUser, 'bad-id', {
+          answerText: 'Because...',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException for unauthorized worker', async () => {
+      mockQuestionRepo.findOne.mockResolvedValue({
+        id: 'q-1',
+        sundaySchoolClass: mockClass,
+        askedBy: { id: 'member-1' },
+      });
+      mockDepartmentAccessService.hasCapability.mockResolvedValue(false);
+      mockClassRepo.findOne.mockResolvedValue(null); // not the teacher either
+
+      await expect(
+        service.answerQuestion(otherWorkerUser, 'q-1', {
+          answerText: 'Because...',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('answers the question and notifies the asking member', async () => {
+      const question = {
+        id: 'q-1',
+        questionText: 'Why?',
+        sundaySchoolClass: { id: 'class-1', name: 'Beginners' },
+        askedBy: {
+          id: 'member-1',
+          firstname: 'Jane',
+          email: 'jane@example.com',
+        },
+      };
+      mockQuestionRepo.findOne.mockResolvedValue(question);
+      mockDepartmentAccessService.hasCapability.mockResolvedValue(true);
+      mockQuestionRepo.save.mockImplementation((q) => Promise.resolve(q));
+
+      const result = await service.answerQuestion(ssWorkerUser, 'q-1', {
+        answerText: 'Because...',
+      });
+
+      expect(result.answerText).toBe('Because...');
+      expect(result.answeredBy).toEqual({ id: ssWorkerUser.id });
+      expect(result.answeredAt).toBeInstanceOf(Date);
+      expect(mockNotificationDispatchService.notifyMember).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: expect.objectContaining({ to: 'jane@example.com' }),
+          push: expect.objectContaining({ memberIds: ['member-1'] }),
+        }),
+      );
+    });
+  });
+
+  // ─── admin: questions ─────────────────────────────────────────────────────
+
+  describe('adminGetQuestionsForClass', () => {
+    it('should throw NotFoundException when class not found', async () => {
+      mockClassRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.adminGetQuestionsForClass('bad-id')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('returns paginated questions', async () => {
+      mockClassRepo.findOne.mockResolvedValue(mockClass);
+      mockQuestionRepo.findAndCount.mockResolvedValue([[{ id: 'q-1' }], 1]);
+
+      const result = await service.adminGetQuestionsForClass('class-1');
+
+      expect(result.data).toHaveLength(1);
+    });
+  });
+
+  describe('adminAnswerQuestion', () => {
+    it('should throw NotFoundException when question not found', async () => {
+      mockQuestionRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.adminAnswerQuestion('bad-id', { answerText: 'x' }, 'admin-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('answers the question without requiring worker auth', async () => {
+      const question = {
+        id: 'q-1',
+        questionText: 'Why?',
+        sundaySchoolClass: { id: 'class-1', name: 'Beginners' },
+        askedBy: { id: 'member-1', firstname: 'Jane', email: 'jane@x.com' },
+      };
+      mockQuestionRepo.findOne.mockResolvedValue(question);
+      mockQuestionRepo.save.mockImplementation((q) => Promise.resolve(q));
+
+      const result = await service.adminAnswerQuestion(
+        'q-1',
+        { answerText: 'Because...' },
+        'admin-1',
+      );
+
+      expect(result.answerText).toBe('Because...');
+      expect(result.answeredBy).toEqual({ id: 'admin-1' });
+    });
+  });
+
+  describe('adminDeleteQuestion', () => {
+    it('should throw NotFoundException when question not found', async () => {
+      mockQuestionRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.adminDeleteQuestion('bad-id')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('removes the question', async () => {
+      const question = { id: 'q-1' };
+      mockQuestionRepo.findOne.mockResolvedValue(question);
+      mockQuestionRepo.remove.mockResolvedValue(undefined);
+
+      await service.adminDeleteQuestion('q-1');
+
+      expect(mockQuestionRepo.remove).toHaveBeenCalledWith(question);
     });
   });
 });

@@ -12,6 +12,7 @@ import { SundaySchoolClass } from '../entity/sunday-school-class.entity';
 import { SundaySchoolMember } from '../entity/sunday-school-member.entity';
 import { SundaySchoolSession } from '../entity/sunday-school-session.entity';
 import { SundaySchoolAttendance } from '../entity/sunday-school-attendance.entity';
+import { SundaySchoolQuestion } from '../entity/sunday-school-question.entity';
 import { SundaySchoolAttendanceStatus } from '../enums/sunday-school-attendance-status.enum';
 import {
   CreateSundaySchoolClassDto,
@@ -20,11 +21,17 @@ import {
 import { AssignSundaySchoolMemberDto } from '../dto/assign-sunday-school-member.dto';
 import { CreateSundaySchoolSessionDto } from '../dto/create-sunday-school-session.dto';
 import { BulkMarkAttendanceDto } from '../dto/bulk-mark-attendance.dto';
+import {
+  AskQuestionDto,
+  AnswerQuestionDto,
+} from '../dto/sunday-school-question.dto';
 import { Member } from '../../member/entity/member.entity';
 import { MemberAuth } from '../../auth/interface/auth.interface';
 import { DepartmentCapability } from '../../department/enums/department-capability.enum';
 import { DepartmentAccessService } from '../../department/service/department-access.service';
 import { PaginationResponseDto } from '../../utility/dto/pagination-response.dto';
+import { NotificationDispatchService } from '../../utility/service/notification-dispatch.service';
+import { EmailCategory } from '../../utility/email-provider/email-category.enum';
 
 export interface SessionRosterEntry {
   memberId: string;
@@ -58,7 +65,10 @@ export class SundaySchoolService {
     private readonly attendanceRepo: Repository<SundaySchoolAttendance>,
     @InjectRepository(Member)
     private readonly memberRepo: Repository<Member>,
+    @InjectRepository(SundaySchoolQuestion)
+    private readonly questionRepo: Repository<SundaySchoolQuestion>,
     private readonly departmentAccessService: DepartmentAccessService,
+    private readonly notificationDispatchService: NotificationDispatchService,
   ) {}
 
   async createClass(
@@ -595,6 +605,195 @@ export class SundaySchoolService {
     };
   }
 
+  // ─── Questions (Q&A) ──────────────────────────────────────────────────────
+
+  async getMyClasses(user: MemberAuth): Promise<SundaySchoolClass[]> {
+    const assignments = await this.memberAssignRepo.find({
+      where: { member: { id: user.id } },
+      relations: ['sundaySchoolClass'],
+    });
+    return assignments.map((a) => a.sundaySchoolClass);
+  }
+
+  async askQuestion(
+    user: MemberAuth,
+    classId: string,
+    dto: AskQuestionDto,
+  ): Promise<SundaySchoolQuestion> {
+    const cls = await this.classRepo.findOne({
+      where: { id: classId },
+      relations: ['teacher'],
+    });
+    if (!cls) throw new NotFoundException('Sunday School class not found');
+    const assignment = await this.memberAssignRepo.findOne({
+      where: { member: { id: user.id }, sundaySchoolClass: { id: classId } },
+    });
+    if (!assignment)
+      throw new ForbiddenException(
+        'You are not assigned to this Sunday School class',
+      );
+
+    const question = this.questionRepo.create({
+      sundaySchoolClass: cls,
+      askedBy: { id: user.id } as Member,
+      questionText: dto.questionText,
+    });
+    const saved = await this.questionRepo.save(question);
+
+    const asker = await this.memberRepo.findOne({ where: { id: user.id } });
+    await this.notifyOnQuestionAsked(cls, asker);
+
+    return saved;
+  }
+
+  // A class with an assigned teacher notifies just them (email + push) —
+  // they're the direct owner. A class with no assigned teacher falls back
+  // to every Sunday-School-capability worker (push only — an inbox hit for
+  // the whole team on every question in an unusual, teacherless class isn't
+  // worth it) rather than the question landing with nobody notified at all.
+  private async notifyOnQuestionAsked(
+    cls: SundaySchoolClass,
+    asker: Member | null,
+  ): Promise<void> {
+    const askerName = asker
+      ? `${asker.firstname} ${asker.lastname}`
+      : 'A student';
+    if (cls.teacher) {
+      const teacher = await this.memberRepo.findOne({
+        where: { id: cls.teacher.id },
+      });
+      if (!teacher) return;
+      await this.notificationDispatchService.notifyMember({
+        category: EmailCategory.SUNDAY_SCHOOL_QA,
+        email: {
+          to: teacher.email,
+          subject: `New question in ${cls.name}`,
+          template: 'sunday-school-question-asked',
+          data: { name: teacher.firstname, className: cls.name, askerName },
+        },
+        push: {
+          memberIds: [teacher.id],
+          title: 'New Sunday School Question',
+          body: `${askerName} asked a question in ${cls.name}.`,
+          url: '/sunday-school',
+          idempotencyKey: `sunday-school-question-asked:${cls.id}:${Date.now()}`,
+        },
+      });
+      return;
+    }
+
+    const staffIds =
+      await this.departmentAccessService.findMemberIdsWithCapability(
+        DepartmentCapability.MANAGE_SUNDAY_SCHOOL,
+      );
+    if (staffIds.length === 0) return;
+    await this.notificationDispatchService.notifyMember({
+      category: EmailCategory.SUNDAY_SCHOOL_QA,
+      push: {
+        memberIds: staffIds,
+        title: 'New Sunday School Question',
+        body: `${askerName} asked a question in ${cls.name} (no teacher assigned).`,
+        url: '/sunday-school',
+        idempotencyKey: `sunday-school-question-asked:${cls.id}:${Date.now()}`,
+      },
+    });
+  }
+
+  async getMyQuestions(
+    user: MemberAuth,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginationResponseDto<SundaySchoolQuestion>> {
+    const [data, totalCount] = await this.questionRepo.findAndCount({
+      where: { askedBy: { id: user.id } },
+      relations: ['sundaySchoolClass'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return {
+      data,
+      page,
+      limit,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+    };
+  }
+
+  async getQuestionsForClass(
+    user: MemberAuth,
+    classId: string,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginationResponseDto<SundaySchoolQuestion>> {
+    const cls = await this.classRepo.findOne({ where: { id: classId } });
+    if (!cls) throw new NotFoundException('Sunday School class not found');
+    await this.requireSundaySchoolAuth(user, classId);
+    const [data, totalCount] = await this.questionRepo.findAndCount({
+      where: { sundaySchoolClass: { id: classId } },
+      relations: ['askedBy'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return {
+      data,
+      page,
+      limit,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+    };
+  }
+
+  async answerQuestion(
+    user: MemberAuth,
+    questionId: string,
+    dto: AnswerQuestionDto,
+  ): Promise<SundaySchoolQuestion> {
+    const question = await this.questionRepo.findOne({
+      where: { id: questionId },
+      relations: ['sundaySchoolClass', 'askedBy'],
+    });
+    if (!question) throw new NotFoundException('Question not found');
+    await this.requireSundaySchoolAuth(user, question.sundaySchoolClass.id);
+    return this.applyAnswer(question, dto, user.id);
+  }
+
+  private async applyAnswer(
+    question: SundaySchoolQuestion,
+    dto: AnswerQuestionDto,
+    answererId: string,
+  ): Promise<SundaySchoolQuestion> {
+    question.answerText = dto.answerText;
+    question.answeredBy = { id: answererId } as Member;
+    question.answeredAt = new Date();
+    const saved = await this.questionRepo.save(question);
+
+    await this.notificationDispatchService.notifyMember({
+      category: EmailCategory.SUNDAY_SCHOOL_QA,
+      email: {
+        to: question.askedBy.email,
+        subject: `Your question in ${question.sundaySchoolClass.name} was answered`,
+        template: 'sunday-school-question-answered',
+        data: {
+          name: question.askedBy.firstname,
+          className: question.sundaySchoolClass.name,
+          questionText: question.questionText,
+          answerText: dto.answerText,
+        },
+      },
+      push: {
+        memberIds: [question.askedBy.id],
+        title: 'Your Question Was Answered',
+        body: `Your question in ${question.sundaySchoolClass.name} has been answered.`,
+        url: '/sunday-school',
+        idempotencyKey: `sunday-school-question-answered:${saved.id}`,
+      },
+    });
+
+    return saved;
+  }
+
   // ─── Admin Methods (bypass worker auth) ──────────────────────────────────
 
   async adminCreateClass(
@@ -843,6 +1042,50 @@ export class SundaySchoolService {
         };
       }),
     };
+  }
+
+  async adminGetQuestionsForClass(
+    classId: string,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginationResponseDto<SundaySchoolQuestion>> {
+    const cls = await this.classRepo.findOne({ where: { id: classId } });
+    if (!cls) throw new NotFoundException('Sunday School class not found');
+    const [data, totalCount] = await this.questionRepo.findAndCount({
+      where: { sundaySchoolClass: { id: classId } },
+      relations: ['askedBy'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return {
+      data,
+      page,
+      limit,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+    };
+  }
+
+  async adminAnswerQuestion(
+    questionId: string,
+    dto: AnswerQuestionDto,
+    answererId: string,
+  ): Promise<SundaySchoolQuestion> {
+    const question = await this.questionRepo.findOne({
+      where: { id: questionId },
+      relations: ['sundaySchoolClass', 'askedBy'],
+    });
+    if (!question) throw new NotFoundException('Question not found');
+    return this.applyAnswer(question, dto, answererId);
+  }
+
+  async adminDeleteQuestion(questionId: string): Promise<void> {
+    const question = await this.questionRepo.findOne({
+      where: { id: questionId },
+    });
+    if (!question) throw new NotFoundException('Question not found');
+    await this.questionRepo.remove(question);
   }
 
   // ─── Response Shaping Helpers ─────────────────────────────────────────────

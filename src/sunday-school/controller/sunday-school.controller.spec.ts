@@ -27,6 +27,11 @@ const mockSundaySchoolService = {
   deleteSession: jest.fn(),
   getOpenSessionsForMember: jest.fn(),
   getMyAttendanceHistory: jest.fn(),
+  getMyClasses: jest.fn(),
+  askQuestion: jest.fn(),
+  getQuestionsForClass: jest.fn(),
+  getMyQuestions: jest.fn(),
+  answerQuestion: jest.fn(),
 };
 
 const mockUser = {
@@ -274,6 +279,71 @@ describe('SundaySchoolController', () => {
     expect(mockSundaySchoolService.getSessionRoster).toHaveBeenCalledWith(
       mockUser,
       'session-1',
+    );
+  });
+
+  it('getMyClasses — passes req.user to service', async () => {
+    mockSundaySchoolService.getMyClasses.mockResolvedValue([]);
+
+    await controller.getMyClasses(mockReq);
+
+    expect(mockSundaySchoolService.getMyClasses).toHaveBeenCalledWith(mockUser);
+  });
+
+  it('askQuestion — passes req.user, classId, and dto', async () => {
+    const dto = { questionText: 'Why?' };
+    mockSundaySchoolService.askQuestion.mockResolvedValue({ id: 'q-1' });
+
+    await controller.askQuestion(mockReq, 'class-1', dto as any);
+
+    expect(mockSundaySchoolService.askQuestion).toHaveBeenCalledWith(
+      mockUser,
+      'class-1',
+      dto,
+    );
+  });
+
+  it('getQuestionsForClass — coerces page/limit, passes req.user and classId', async () => {
+    mockSundaySchoolService.getQuestionsForClass.mockResolvedValue({
+      data: [],
+      totalCount: 0,
+    });
+
+    await controller.getQuestionsForClass(mockReq, 'class-1', 1, 20);
+
+    expect(mockSundaySchoolService.getQuestionsForClass).toHaveBeenCalledWith(
+      mockUser,
+      'class-1',
+      1,
+      20,
+    );
+  });
+
+  it('getMyQuestions — coerces page/limit, passes req.user', async () => {
+    mockSundaySchoolService.getMyQuestions.mockResolvedValue({
+      data: [],
+      totalCount: 0,
+    });
+
+    await controller.getMyQuestions(mockReq, 1, 20);
+
+    expect(mockSundaySchoolService.getMyQuestions).toHaveBeenCalledWith(
+      mockUser,
+      1,
+      20,
+    );
+  });
+
+  it('answerQuestion — passes req.user, id, and dto', async () => {
+    const dto = { answerText: 'Because...' };
+    mockSundaySchoolService.answerQuestion.mockResolvedValue({ id: 'q-1' });
+
+    await controller.answerQuestion(mockReq, 'q-1', dto as any);
+
+    expect(mockSundaySchoolService.answerQuestion).toHaveBeenCalledWith(
+      mockUser,
+      'q-1',
+      dto,
     );
   });
 });

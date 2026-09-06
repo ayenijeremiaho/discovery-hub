@@ -800,6 +800,21 @@ One attendance record per member per session.
 
 **Unique constraint:** (session, member)
 
+### SundaySchoolQuestion
+
+A private question a student asked in one of their Sunday School classes, and its answer once one exists. Visible
+only to the asking member and Sunday School staff/the class's teacher — never shared with the rest of the class.
+
+| Field         | Type           | Notes                                                  |
+|---------------|----------------|---------------------------------------------------------|
+| id            | UUID           | PK                                                      |
+| sundaySchoolClass | SundaySchoolClass | ManyToOne                                          |
+| askedBy       | Member         | ManyToOne — the asking student                          |
+| questionText  | text           | Max 1000 chars (DTO-enforced)                           |
+| answerText    | text \| null   | Max 3000 chars (DTO-enforced); null until answered      |
+| answeredBy    | Member \| null | ManyToOne, nullable — the teacher/staff who answered    |
+| answeredAt    | timestamptz \| null | null until answered                                |
+
 ### ChildAgeGroup
 
 Defines an age bracket for automatic child classification.
@@ -4789,6 +4804,7 @@ dedicated host).
 | `ASSIGNMENT_REMINDER` | `EMAIL_ASSIGNMENT_REMINDER_ENABLED` | `true` |
 | `CLASS_SESSION_REMINDER` | `EMAIL_CLASS_SESSION_REMINDER_ENABLED` | `true` |
 | `FORM_SUBMISSION` | `EMAIL_FORM_SUBMISSION_ENABLED` | `true` |
+| `SUNDAY_SCHOOL_QA` | `EMAIL_SUNDAY_SCHOOL_QA_ENABLED` | `true` |
 
 Template files live in `src/utility/templates/*.html` and use `{{variable}}` for simple substitution, `{{#if}}` for
 conditionals, and `{{#each}}` for loops. Values are HTML-escaped automatically; use `{{{variable}}}` only for
@@ -4940,6 +4956,38 @@ Material" on the teacher's roster panel (`discuva-member` mobile) and via a smal
 **Routes prefix:** `/sunday-school` (worker/member routes) and `/admin/sunday-school` (admin routes)
 
 **Admin controller (`/admin/sunday-school`):** All routes require `AdminGuard`. Provides the same class and session management as the worker controller but bypasses the `requireSundaySchoolAuth` check so that admins can manage any class regardless of department or teacher assignment.
+
+**Questions (Q&A) (added 2026-09-06):** Any member assigned to a class can ask a private question against it
+(`POST /sunday-school/classes/:id/questions`) — visible only to the asking student and to Sunday School staff/the
+class's teacher, never shared with the rest of the class. `SundaySchoolQuestion` (new entity, `sunday_school_questions`
+table) holds `questionText`, and `answerText`/`answeredBy`/`answeredAt` (all null until answered). No new
+`AdminPermission` was introduced — the existing `SUNDAY_SCHOOL_READ`/`SUNDAY_SCHOOL_WRITE` pair already gates every
+other Sunday School sub-resource in this module (classes, sessions, roster) the same way, matching the codebase-wide
+convention that a module gets one READ/WRITE pair, not one per sub-resource.
+
+- `GET /sunday-school/my-classes` — the classes the calling member is assigned to (needed because nothing previously
+  told a student which classes they're even in; used to populate the class picker when asking a question).
+- `POST /sunday-school/classes/:id/questions` — `JwtAuthGuard` only; the service itself verifies the caller is
+  assigned to the class (`ForbiddenException` if not), the same check `selfMarkPresent` already does.
+- `GET /sunday-school/classes/:id/questions` — teacher/SS-staff view of every question asked in one class
+  (`requireSundaySchoolAuth`).
+- `GET /sunday-school/questions/me` — the calling member's own questions across all their classes, paginated.
+- `PATCH /sunday-school/questions/:id/answer` — teacher/SS-staff answers a question (`requireSundaySchoolAuth`).
+- Admin mirrors under `/admin/sunday-school`: `GET classes/:id/questions`, `PATCH questions/:id/answer` (both bypass
+  `requireSundaySchoolAuth` like every other admin method here), plus `DELETE questions/:id` for moderation.
+
+**Teacher-notification fallback rule:** asking a question notifies the class's assigned teacher (email + push, new
+`EmailCategory.SUNDAY_SCHOOL_QA`, gated by `EMAIL_SUNDAY_SCHOOL_QA_ENABLED` + the per-tenant category toggle same as
+every other category). If the class has **no** assigned teacher, it instead notifies every member with the
+`MANAGE_SUNDAY_SCHOOL` department capability (push only, no email — a fallback for an unusual state, not worth an
+inbox hit for the whole team on every question). This reverse lookup — "who has capability X," as opposed to
+`DepartmentAccessService.hasCapability`'s existing "does this one member have it" — is a new, reusable
+`DepartmentAccessService.findMemberIdsWithCapability()` method, centralizing a raw capability-join query pattern that
+previously existed inline in three other services (`FollowUpService`, `ServiceSessionService`). Answering a question
+notifies the asking member back the same way (email + push). Both legs go through
+`NotificationDispatchService.notifyMember()` — the shared category-gated dispatcher — not the older, ungated
+`PushNotificationService.dispatchToMemberIds`/`sendEmailWithTemplate` pair some pre-existing modules (e.g.
+`PastorFeedbackService`) still call directly.
 
 ### Tithe Module
 
@@ -6908,6 +6956,11 @@ outside the requested `?months=` window).
 | GET    | /sunday-school/sessions?classId=                           | Any                                                           | List sessions for a class (paginated)                                                                         |
 | GET    | /sunday-school/sessions/:id                                | Any                                                           | Get SS session by ID                                                                                          |
 | DELETE | /sunday-school/sessions/:id                                | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Delete SS session                                                                                             |
+| GET    | /sunday-school/my-classes                                  | Any authenticated member                                      | Classes the caller is assigned to                                                                             |
+| POST   | /sunday-school/classes/:id/questions                       | Any (member must be enrolled in the class)                    | Ask a private question in a class                                                                             |
+| GET    | /sunday-school/classes/:id/questions                       | WORKER (SS-dept or class teacher)                             | List questions asked in a class (paginated)                                                                   |
+| GET    | /sunday-school/questions/me                                | Any authenticated member                                      | Paginated list of the member's own questions, across all classes                                              |
+| PATCH  | /sunday-school/questions/:id/answer                        | WORKER (SS-dept or class teacher)                              | Answer a question (body: `{ answerText }`)                                                                    |
 | GET    | /admin/sunday-school/classes                               | AdminGuard (SUNDAY_SCHOOL_READ)                               | List SS classes (paginated)                                                                                   |
 | POST   | /admin/sunday-school/classes                               | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Create SS class (no auth restriction on department or teacher)                                                |
 | PATCH  | /admin/sunday-school/classes/:id                           | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Update SS class                                                                                               |
@@ -6922,6 +6975,9 @@ outside the requested `?months=` window).
 | PATCH  | /admin/sunday-school/sessions/:id/close                    | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Close self-mark window                                                                                        |
 | GET    | /admin/sunday-school/sessions/:id/roster                   | AdminGuard (SUNDAY_SCHOOL_READ)                               | Get session attendance roster                                                                                 |
 | POST   | /admin/sunday-school/sessions/:id/bulk-mark                | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Bulk mark session attendance; returns `{ marked: number }`                                                    |
+| GET    | /admin/sunday-school/classes/:id/questions                 | AdminGuard (SUNDAY_SCHOOL_READ)                               | List questions asked in a class (paginated)                                                                   |
+| PATCH  | /admin/sunday-school/questions/:id/answer                  | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Answer a question (body: `{ answerText }`)                                                                    |
+| DELETE | /admin/sunday-school/questions/:id                         | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Delete a question (moderation)                                                                                |
 | POST   | /children-church/age-groups                                | AdminGuard (CHILDREN_CHURCH_WRITE)                            | Create age group                                                                                              |
 | PATCH  | /children-church/age-groups/:id                            | AdminGuard (CHILDREN_CHURCH_WRITE)                            | Update age group                                                                                              |
 | DELETE | /children-church/age-groups/:id                            | AdminGuard (CHILDREN_CHURCH_WRITE)                            | Delete age group                                                                                              |
@@ -7490,6 +7546,7 @@ Each flag defaults to `true`. Set to `false` to suppress that category of emails
 | `EMAIL_ASSIGNMENT_REMINDER_ENABLED` | `true` | Assignment due-date reminders |
 | `EMAIL_CLASS_SESSION_REMINDER_ENABLED` | `true` | Class next-session reminders |
 | `EMAIL_FORM_SUBMISSION_ENABLED` | `true` | Admin notification on a new form submission (also requires the form's own `notifyOnSubmission` to be on) |
+| `EMAIL_SUNDAY_SCHOOL_QA_ENABLED` | `true` | Sunday School question-asked / question-answered notifications |
 
 ### Auth / OTP
 

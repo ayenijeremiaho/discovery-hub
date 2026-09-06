@@ -299,6 +299,11 @@
       "key": "churchCalendarId",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "ssQuestionId",
+      "value": "",
+      "type": "string"
     }
   ],
   "auth": {
@@ -12210,6 +12215,197 @@
               "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Session not found\"\n}"
             }
           ]
+        },
+        {
+          "name": "Get My Sunday School Classes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sunday-school/my-classes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sunday-school",
+                "my-classes"
+              ]
+            },
+            "description": "Any authenticated member. Returns the classes the caller is assigned to \u2014 used to populate the class picker when asking a question."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "[ { \"id\": \"uuid\", \"name\": \"Beginners\", \"description\": null, \"teacher\": null } ]"
+            }
+          ]
+        },
+        {
+          "name": "Ask a Question",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sunday-school/classes/{{ssClassId}}/questions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sunday-school",
+                "classes",
+                "{{ssClassId}}",
+                "questions"
+              ]
+            },
+            "description": "Any authenticated member who is assigned to the class. Asks a private question, visible only to the asker and Sunday School staff/the class teacher. Notifies the assigned teacher (or, if none, every Sunday-School-capability worker).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"questionText\": \"Why do we pray before meals?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{ \"id\": \"uuid\", \"questionText\": \"Why do we pray before meals?\", \"answerText\": null, \"answeredAt\": null }"
+            },
+            {
+              "name": "403 Forbidden",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{ \"statusCode\": 403, \"message\": \"You are not assigned to this Sunday School class\" }"
+            }
+          ]
+        },
+        {
+          "name": "Get Questions for Class",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sunday-school/classes/{{ssClassId}}/questions?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sunday-school",
+                "classes",
+                "{{ssClassId}}",
+                "questions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "WORKER (SS-dept or class teacher). Paginated list of every question asked in this class."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"data\": [], \"totalCount\": 0, \"page\": 1, \"limit\": 20, \"totalPages\": 0 }"
+            }
+          ]
+        },
+        {
+          "name": "Get My Questions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sunday-school/questions/me?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sunday-school",
+                "questions",
+                "me"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Any authenticated member. Paginated list of the caller's own questions across all their classes."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"data\": [], \"totalCount\": 0, \"page\": 1, \"limit\": 20, \"totalPages\": 0 }"
+            }
+          ]
+        },
+        {
+          "name": "Answer a Question",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sunday-school/questions/{{ssQuestionId}}/answer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sunday-school",
+                "questions",
+                "{{ssQuestionId}}",
+                "answer"
+              ]
+            },
+            "description": "WORKER (SS-dept or class teacher). Answers a question and notifies the asking member (email + push).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answerText\": \"Because it teaches gratitude.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"id\": \"uuid\", \"answerText\": \"Because...\", \"answeredAt\": \"2026-06-15T10:00:00.000Z\" }"
+            }
+          ]
         }
       ]
     },
@@ -12701,6 +12897,116 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"marked\": 2,\n  \"attendances\": [\n    {\n      \"id\": \"ssa1a2b3-c4d5-e6f7-8901-abcdef123456\",\n      \"session\": {\n        \"id\": \"sss1a2b3-c4d5-e6f7-8901-abcdef123456\",\n        \"sundaySchoolClass\": {\n          \"id\": \"ssc1a2b3-c4d5-e6f7-8901-abcdef123456\",\n          \"name\": \"Foundations of Faith\",\n          \"description\": \"Core doctrine class for new and growing believers\",\n          \"teacher\": {\n            \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n            \"firstname\": \"John\",\n            \"lastname\": \"Doe\"\n          },\n          \"createdAt\": \"2026-07-02T08:00:00.000Z\",\n          \"updatedAt\": \"2026-07-02T08:00:00.000Z\"\n        },\n        \"sessionDate\": \"2026-07-06\",\n        \"selfMarkClosesAt\": null,\n        \"notes\": \"Chapter 4 - Salvation\", \"documentUrl\": \"https://drive.google.com/file/d/example\",\n        \"createdAt\": \"2026-07-02T08:00:00.000Z\",\n        \"updatedAt\": \"2026-07-02T08:00:00.000Z\"\n      },\n      \"member\": {\n        \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n        \"firstname\": \"John\",\n        \"lastname\": \"Doe\"\n      },\n      \"status\": \"PRESENT\",\n      \"markedByTeacher\": true,\n      \"markedAt\": \"2026-07-06T10:00:00.000Z\",\n      \"createdAt\": \"2026-07-06T10:00:00.000Z\",\n      \"updatedAt\": \"2026-07-06T10:00:00.000Z\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Questions for Class (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/sunday-school/classes/{{ssClassId}}/questions?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "sunday-school",
+                "classes",
+                "{{ssClassId}}",
+                "questions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "AdminGuard (SUNDAY_SCHOOL_READ). Paginated list of every question asked in this class."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"data\": [], \"totalCount\": 0, \"page\": 1, \"limit\": 20, \"totalPages\": 0 }"
+            }
+          ]
+        },
+        {
+          "name": "Answer a Question (Admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/sunday-school/questions/{{ssQuestionId}}/answer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "sunday-school",
+                "questions",
+                "{{ssQuestionId}}",
+                "answer"
+              ]
+            },
+            "description": "AdminGuard (SUNDAY_SCHOOL_WRITE). Answers a question and notifies the asking member (email + push).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answerText\": \"Because it teaches gratitude.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"id\": \"uuid\", \"answerText\": \"Because...\", \"answeredAt\": \"2026-06-15T10:00:00.000Z\" }"
+            }
+          ]
+        },
+        {
+          "name": "Delete a Question (Admin)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/sunday-school/questions/{{ssQuestionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "sunday-school",
+                "questions",
+                "{{ssQuestionId}}"
+              ]
+            },
+            "description": "AdminGuard (SUNDAY_SCHOOL_WRITE). Deletes a question \u2014 moderation use (e.g. inappropriate content)."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"message\": \"Question deleted\" }"
             }
           ]
         }

@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Request,
   UseGuards,
 } from '@nestjs/common';
 import { AdminGuard } from '../../admin/guard/admin.guard';
@@ -24,6 +25,7 @@ import {
   OpenSelfMarkDto,
 } from '../dto/create-sunday-school-session.dto';
 import { BulkMarkAttendanceDto } from '../dto/bulk-mark-attendance.dto';
+import { AnswerQuestionDto } from '../dto/sunday-school-question.dto';
 import { RequiresModule } from '../../church-settings/decorator/requires-module.decorator';
 import { ModuleEnabledGuard } from '../../church-settings/guard/module-enabled.guard';
 
@@ -142,5 +144,37 @@ export class SundaySchoolAdminController {
     @Body() dto: BulkMarkAttendanceDto,
   ) {
     return this.sundaySchoolService.adminBulkMarkAttendance(id, dto);
+  }
+
+  // ─── Questions (Q&A) ──────────────────────────────────────────────────────
+
+  @RequiresPermission(AdminPermission.SUNDAY_SCHOOL_READ)
+  @Get('classes/:id/questions')
+  getQuestionsForClass(
+    @Param('id', ParseUUIDPipe) classId: string,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.sundaySchoolService.adminGetQuestionsForClass(
+      classId,
+      +page,
+      +limit,
+    );
+  }
+
+  @RequiresPermission(AdminPermission.SUNDAY_SCHOOL_WRITE)
+  @Patch('questions/:id/answer')
+  answerQuestion(
+    @Request() req: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AnswerQuestionDto,
+  ) {
+    return this.sundaySchoolService.adminAnswerQuestion(id, dto, req.user.id);
+  }
+
+  @RequiresPermission(AdminPermission.SUNDAY_SCHOOL_WRITE)
+  @Delete('questions/:id')
+  deleteQuestion(@Param('id', ParseUUIDPipe) id: string) {
+    return this.sundaySchoolService.adminDeleteQuestion(id);
   }
 }

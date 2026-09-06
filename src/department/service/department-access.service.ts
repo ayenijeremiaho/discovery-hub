@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { WorkerProfile } from '../../member/entity/worker-profile.entity';
+import { WorkerStatusEnum } from '../../member/enums/worker-status.enum';
 import { DepartmentCapability } from '../enums/department-capability.enum';
 
 // Collapses what used to be 7 near-identical assertIsXDeptWorker() methods
@@ -41,5 +42,29 @@ export class DepartmentAccessService {
       message ??
         `Only workers in a department with the '${capability}' capability can perform this action`,
     );
+  }
+
+  // The reverse of hasCapability — "who has capability X" rather than "does
+  // this one member have it" — for notification fan-out (e.g. a Sunday
+  // School class with no assigned teacher: notify every SS-capability
+  // worker instead of nobody). Mirrors the raw capability-join pattern
+  // already used inline in FollowUpService.pickRoundRobinAssignee and
+  // ServiceSessionService, centralized here so a third call site doesn't
+  // repeat it.
+  async findMemberIdsWithCapability(
+    capability: DepartmentCapability,
+  ): Promise<string[]> {
+    const rows = await this.workerProfileRepo
+      .createQueryBuilder('wp')
+      .select('member.id', 'memberId')
+      .innerJoin('wp.member', 'member')
+      .leftJoin('wp.department', 'd')
+      .leftJoin('wp.secondaryDepartment', 'sd')
+      .where('(:cap = ANY(d.capabilities) OR :cap = ANY(sd.capabilities))', {
+        cap: capability,
+      })
+      .andWhere('wp.status = :status', { status: WorkerStatusEnum.ACTIVE })
+      .getRawMany<{ memberId: string }>();
+    return rows.map((r) => r.memberId);
   }
 }
