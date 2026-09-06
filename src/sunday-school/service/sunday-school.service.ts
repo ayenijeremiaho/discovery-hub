@@ -745,6 +745,52 @@ export class SundaySchoolService {
     };
   }
 
+  // Cross-class view for SS staff — the per-class list above requires
+  // opening one class at a time to see its questions, which doesn't scale
+  // to "what's been asked across all my classes" for a team of teachers.
+  // Gated on the department capability only (not the requireSundaySchoolAuth
+  // teacher fallback) — a class-specific teacher who isn't in the SS
+  // department shouldn't see every other class's private Q&A, only their
+  // own via getQuestionsForClass.
+  async getAllQuestions(
+    user: MemberAuth,
+    page = 1,
+    limit = 20,
+  ): Promise<PaginationResponseDto<SundaySchoolQuestion>> {
+    await this.departmentAccessService.assertHasCapability(
+      user.id,
+      DepartmentCapability.MANAGE_SUNDAY_SCHOOL,
+      'Only Sunday School staff can view questions across all classes.',
+    );
+    return this.queryAllQuestions(page, limit);
+  }
+
+  async adminGetAllQuestions(
+    page = 1,
+    limit = 20,
+  ): Promise<PaginationResponseDto<SundaySchoolQuestion>> {
+    return this.queryAllQuestions(page, limit);
+  }
+
+  private async queryAllQuestions(
+    page: number,
+    limit: number,
+  ): Promise<PaginationResponseDto<SundaySchoolQuestion>> {
+    const [data, totalCount] = await this.questionRepo.findAndCount({
+      relations: ['askedBy', 'sundaySchoolClass'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return {
+      data,
+      page,
+      limit,
+      totalCount,
+      totalPages: Math.ceil(totalCount / limit),
+    };
+  }
+
   async answerQuestion(
     user: MemberAuth,
     questionId: string,

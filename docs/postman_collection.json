@@ -12291,6 +12291,48 @@
           ]
         },
         {
+          "name": "Get All Questions (Cross-Class)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sunday-school/questions?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sunday-school",
+                "questions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "WORKER with the MANAGE_SUNDAY_SCHOOL department capability (not satisfied by the class-teacher fallback). Paginated list of every question asked across every class, most recent first."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"data\": [], \"totalCount\": 0, \"page\": 1, \"limit\": 20, \"totalPages\": 0 }"
+            },
+            {
+              "name": "403 Forbidden",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{ \"statusCode\": 403, \"message\": \"Only Sunday School staff can view questions across all classes.\" }"
+            }
+          ]
+        },
+        {
           "name": "Get Questions for Class",
           "request": {
             "method": "GET",
@@ -12897,6 +12939,43 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"marked\": 2,\n  \"attendances\": [\n    {\n      \"id\": \"ssa1a2b3-c4d5-e6f7-8901-abcdef123456\",\n      \"session\": {\n        \"id\": \"sss1a2b3-c4d5-e6f7-8901-abcdef123456\",\n        \"sundaySchoolClass\": {\n          \"id\": \"ssc1a2b3-c4d5-e6f7-8901-abcdef123456\",\n          \"name\": \"Foundations of Faith\",\n          \"description\": \"Core doctrine class for new and growing believers\",\n          \"teacher\": {\n            \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n            \"firstname\": \"John\",\n            \"lastname\": \"Doe\"\n          },\n          \"createdAt\": \"2026-07-02T08:00:00.000Z\",\n          \"updatedAt\": \"2026-07-02T08:00:00.000Z\"\n        },\n        \"sessionDate\": \"2026-07-06\",\n        \"selfMarkClosesAt\": null,\n        \"notes\": \"Chapter 4 - Salvation\", \"documentUrl\": \"https://drive.google.com/file/d/example\",\n        \"createdAt\": \"2026-07-02T08:00:00.000Z\",\n        \"updatedAt\": \"2026-07-02T08:00:00.000Z\"\n      },\n      \"member\": {\n        \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n        \"firstname\": \"John\",\n        \"lastname\": \"Doe\"\n      },\n      \"status\": \"PRESENT\",\n      \"markedByTeacher\": true,\n      \"markedAt\": \"2026-07-06T10:00:00.000Z\",\n      \"createdAt\": \"2026-07-06T10:00:00.000Z\",\n      \"updatedAt\": \"2026-07-06T10:00:00.000Z\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get All Questions (Admin, Cross-Class)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/sunday-school/questions?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "sunday-school",
+                "questions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "AdminGuard (SUNDAY_SCHOOL_READ). Paginated list of every question asked across every class, most recent first."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"data\": [], \"totalCount\": 0, \"page\": 1, \"limit\": 20, \"totalPages\": 0 }"
             }
           ]
         },

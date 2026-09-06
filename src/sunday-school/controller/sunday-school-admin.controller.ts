@@ -149,6 +149,12 @@ export class SundaySchoolAdminController {
   // ─── Questions (Q&A) ──────────────────────────────────────────────────────
 
   @RequiresPermission(AdminPermission.SUNDAY_SCHOOL_READ)
+  @Get('questions')
+  getAllQuestions(@Query('page') page = 1, @Query('limit') limit = 20) {
+    return this.sundaySchoolService.adminGetAllQuestions(+page, +limit);
+  }
+
+  @RequiresPermission(AdminPermission.SUNDAY_SCHOOL_READ)
   @Get('classes/:id/questions')
   getQuestionsForClass(
     @Param('id', ParseUUIDPipe) classId: string,

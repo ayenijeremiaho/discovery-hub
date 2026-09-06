@@ -31,6 +31,7 @@ const mockSundaySchoolService = {
   askQuestion: jest.fn(),
   getQuestionsForClass: jest.fn(),
   getMyQuestions: jest.fn(),
+  getAllQuestions: jest.fn(),
   answerQuestion: jest.fn(),
 };
 
@@ -279,6 +280,21 @@ describe('SundaySchoolController', () => {
     expect(mockSundaySchoolService.getSessionRoster).toHaveBeenCalledWith(
       mockUser,
       'session-1',
+    );
+  });
+
+  it('getAllQuestions — coerces page/limit, passes req.user', async () => {
+    mockSundaySchoolService.getAllQuestions.mockResolvedValue({
+      data: [],
+      totalCount: 0,
+    });
+
+    await controller.getAllQuestions(mockReq, 1, 20);
+
+    expect(mockSundaySchoolService.getAllQuestions).toHaveBeenCalledWith(
+      mockUser,
+      1,
+      20,
     );
   });
 

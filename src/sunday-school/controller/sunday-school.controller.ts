@@ -150,6 +150,17 @@ export class SundaySchoolController {
     );
   }
 
+  @UseGuards(RolesGuard)
+  @Roles(MemberRoleEnum.WORKER)
+  @Get('questions')
+  async getAllQuestions(
+    @Request() req: any,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ) {
+    return this.sundaySchoolService.getAllQuestions(req.user, +page, +limit);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('questions/me')
   async getMyQuestions(

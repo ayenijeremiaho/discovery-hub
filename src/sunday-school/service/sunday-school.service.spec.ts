@@ -1204,6 +1204,78 @@ describe('SundaySchoolService', () => {
     });
   });
 
+  // ─── getAllQuestions (cross-class, SS staff only) ────────────────────────
+
+  describe('getAllQuestions', () => {
+    it('throws ForbiddenException for a worker without the SS capability', async () => {
+      mockDepartmentAccessService.assertHasCapability.mockRejectedValue(
+        new ForbiddenException(
+          'Only Sunday School staff can view questions across all classes.',
+        ),
+      );
+
+      await expect(service.getAllQuestions(otherWorkerUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockQuestionRepo.findAndCount).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to the class-teacher check — capability only', async () => {
+      mockDepartmentAccessService.assertHasCapability.mockResolvedValue(
+        undefined,
+      );
+      mockQuestionRepo.findAndCount.mockResolvedValue([[{ id: 'q-1' }], 1]);
+
+      await service.getAllQuestions(ssWorkerUser);
+
+      expect(
+        mockDepartmentAccessService.assertHasCapability,
+      ).toHaveBeenCalledWith(
+        ssWorkerUser.id,
+        DepartmentCapability.MANAGE_SUNDAY_SCHOOL,
+        expect.any(String),
+      );
+      expect(mockClassRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('returns questions across every class, most recent first', async () => {
+      mockDepartmentAccessService.assertHasCapability.mockResolvedValue(
+        undefined,
+      );
+      mockQuestionRepo.findAndCount.mockResolvedValue([
+        [{ id: 'q-1' }, { id: 'q-2' }],
+        2,
+      ]);
+
+      const result = await service.getAllQuestions(ssWorkerUser, 1, 20);
+
+      expect(result.data).toHaveLength(2);
+      expect(result.totalCount).toBe(2);
+      expect(mockQuestionRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relations: ['askedBy', 'sundaySchoolClass'],
+          order: { createdAt: 'DESC' },
+        }),
+      );
+      // No classId filter anywhere in the where clause — genuinely cross-class.
+      const call = mockQuestionRepo.findAndCount.mock.calls[0][0];
+      expect(call.where).toBeUndefined();
+    });
+  });
+
+  describe('adminGetAllQuestions', () => {
+    it('returns questions across every class without any capability check', async () => {
+      mockQuestionRepo.findAndCount.mockResolvedValue([[{ id: 'q-1' }], 1]);
+
+      const result = await service.adminGetAllQuestions(1, 20);
+
+      expect(result.data).toHaveLength(1);
+      expect(
+        mockDepartmentAccessService.assertHasCapability,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── answerQuestion ───────────────────────────────────────────────────────
 
   describe('answerQuestion', () => {

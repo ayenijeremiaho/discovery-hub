@@ -815,6 +815,13 @@ only to the asking member and Sunday School staff/the class's teacher — never 
 | answeredBy    | Member \| null | ManyToOne, nullable — the teacher/staff who answered    |
 | answeredAt    | timestamptz \| null | null until answered                                |
 
+**Indexes:** `sundaySchoolClass` and `askedBy` are indexed — every query pattern this module has (per-class list,
+per-student list, and the assignment check in `askQuestion`) filters on one of those two. The cross-class
+`getAllQuestions`/`adminGetAllQuestions` endpoint is a deliberate exception — an unfiltered `ORDER BY created_at DESC`
+across the whole table — with no index on `createdAt`: this table is scoped to one tenant's Sunday School program, so
+even years of activity stays small enough (realistically hundreds to low thousands of rows) that an in-memory sort
+costs nothing meaningful; add one if that assumption ever stops holding.
+
 ### ChildAgeGroup
 
 Defines an age bracket for automatic child classification.
@@ -4973,8 +4980,16 @@ convention that a module gets one READ/WRITE pair, not one per sub-resource.
   (`requireSundaySchoolAuth`).
 - `GET /sunday-school/questions/me` — the calling member's own questions across all their classes, paginated.
 - `PATCH /sunday-school/questions/:id/answer` — teacher/SS-staff answers a question (`requireSundaySchoolAuth`).
-- Admin mirrors under `/admin/sunday-school`: `GET classes/:id/questions`, `PATCH questions/:id/answer` (both bypass
-  `requireSundaySchoolAuth` like every other admin method here), plus `DELETE questions/:id` for moderation.
+- `GET /sunday-school/questions` — cross-class view of **every** question across **every** class (added 2026-09-06,
+  UX follow-up): the per-class endpoint above requires opening one class at a time, which doesn't scale to "what's
+  been asked across my classes" for a team of several teachers. Gated on `DepartmentAccessService.assertHasCapability`
+  alone — deliberately **not** `requireSundaySchoolAuth`'s class-teacher fallback, since a teacher who isn't in the SS
+  department is scoped to their own class's Q&A only, not everyone else's private questions too. Any true SS-dept
+  worker sees every class's questions and answers here.
+- Admin mirrors under `/admin/sunday-school`: `GET questions` (cross-class, no capability check — admin already
+  bypasses department checks everywhere else in this module), `GET classes/:id/questions`,
+  `PATCH questions/:id/answer` (both bypass `requireSundaySchoolAuth` like every other admin method here), plus
+  `DELETE questions/:id` for moderation.
 
 **Teacher-notification fallback rule:** asking a question notifies the class's assigned teacher (email + push, new
 `EmailCategory.SUNDAY_SCHOOL_QA`, gated by `EMAIL_SUNDAY_SCHOOL_QA_ENABLED` + the per-tenant category toggle same as
@@ -6961,6 +6976,7 @@ outside the requested `?months=` window).
 | GET    | /sunday-school/classes/:id/questions                       | WORKER (SS-dept or class teacher)                             | List questions asked in a class (paginated)                                                                   |
 | GET    | /sunday-school/questions/me                                | Any authenticated member                                      | Paginated list of the member's own questions, across all classes                                              |
 | PATCH  | /sunday-school/questions/:id/answer                        | WORKER (SS-dept or class teacher)                              | Answer a question (body: `{ answerText }`)                                                                    |
+| GET    | /sunday-school/questions                                   | WORKER (SS-dept capability only, no class-teacher fallback)   | Questions across every class, paginated                                                                       |
 | GET    | /admin/sunday-school/classes                               | AdminGuard (SUNDAY_SCHOOL_READ)                               | List SS classes (paginated)                                                                                   |
 | POST   | /admin/sunday-school/classes                               | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Create SS class (no auth restriction on department or teacher)                                                |
 | PATCH  | /admin/sunday-school/classes/:id                           | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Update SS class                                                                                               |
@@ -6975,6 +6991,7 @@ outside the requested `?months=` window).
 | PATCH  | /admin/sunday-school/sessions/:id/close                    | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Close self-mark window                                                                                        |
 | GET    | /admin/sunday-school/sessions/:id/roster                   | AdminGuard (SUNDAY_SCHOOL_READ)                               | Get session attendance roster                                                                                 |
 | POST   | /admin/sunday-school/sessions/:id/bulk-mark                | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Bulk mark session attendance; returns `{ marked: number }`                                                    |
+| GET    | /admin/sunday-school/questions                             | AdminGuard (SUNDAY_SCHOOL_READ)                               | Questions across every class, paginated                                                                       |
 | GET    | /admin/sunday-school/classes/:id/questions                 | AdminGuard (SUNDAY_SCHOOL_READ)                               | List questions asked in a class (paginated)                                                                   |
 | PATCH  | /admin/sunday-school/questions/:id/answer                  | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Answer a question (body: `{ answerText }`)                                                                    |
 | DELETE | /admin/sunday-school/questions/:id                         | AdminGuard (SUNDAY_SCHOOL_WRITE)                              | Delete a question (moderation)                                                                                |
