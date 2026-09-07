@@ -296,6 +296,11 @@
       "type": "string"
     },
     {
+      "key": "previewToken",
+      "value": "",
+      "type": "string"
+    },
+    {
       "key": "churchCalendarId",
       "value": "",
       "type": "string"
@@ -10636,7 +10641,7 @@
           "response": []
         },
         {
-          "name": "Update Page \u2014 Publish (Admin)",
+          "name": "Update Page (Admin)",
           "request": {
             "method": "PATCH",
             "header": [
@@ -10657,7 +10662,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"isPublished\": true\n}",
+              "raw": "{\n  \"title\": \"Higher Ground 2026 (Updated)\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -10670,10 +10675,37 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"isPublished\": true\n}"
+              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"title\": \"Higher Ground 2026\",\n  \"draftTitle\": \"Higher Ground 2026 (Updated)\"\n}"
             }
           ],
-          "description": "isPublished is the only thing toggled here \u2014 sections omitted, so they're left untouched (see PATCH /pages/:id's own convention in TECH_DOC.md)."
+          "description": "title/seoDescription/sections write to their draft* counterparts only \u2014 an already-published page can be edited without changing what a visitor sees. slug and isPublished still write live immediately. Use POST /pages/:id/publish to push draft content live."
+        },
+        {
+          "name": "Publish Page (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pages/{{pageId}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "{{pageId}}",
+                "publish"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"isPublished\": true,\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"draftTitle\": \"Higher Ground 2026 (Updated)\"\n}"
+            }
+          ],
+          "description": "Copies every draft* field (draftTitle, draftSeoDescription, draftOgImageUrl/draftOgImagePublicId, draftSections) onto its live counterpart and sets isPublished = true. The only thing that ever moves draft content onto the live page."
         },
         {
           "name": "Upload Page Section Image (Admin)",
@@ -10761,6 +10793,32 @@
           "response": []
         },
         {
+          "name": "List Published Pages (Public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pages/public",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "public"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "[\n  {\n    \"slug\": \"higher-ground-2026\",\n    \"title\": \"Higher Ground 2026\",\n    \"seoDescription\": \"A conference for young adults\",\n    \"updatedAt\": \"2026-09-01T12:00:00.000Z\"\n  }\n]"
+            }
+          ],
+          "description": "No auth required. Every published page for the tenant resolved from X-Tenant-Subdomain \u2014 slug/title/seoDescription/updatedAt only, never draft content. Feeds discuva-member's sitemap.xml/robots.txt/llms.txt."
+        },
+        {
           "name": "Get Public Page",
           "request": {
             "method": "GET",
@@ -10792,6 +10850,46 @@
             }
           ],
           "description": "No auth required. 404s identically for an unpublished page and a slug that never existed \u2014 a visitor can never tell the difference."
+        },
+        {
+          "name": "Get Page Preview (Public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pages/public/{{pageSlug}}/preview?token={{previewToken}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "public",
+                "{{pageSlug}}",
+                "preview"
+              ],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{previewToken}}"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"sections\": []\n}"
+            },
+            {
+              "name": "404 wrong or missing token",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"statusCode\": 404,\n  \"message\": \"Page not found\"\n}"
+            }
+          ],
+          "description": "No auth required \u2014 the token in the query string is the only gate. Returns draft* content instead of live, so an admin can preview an edit (or a never-published page) before publishing. Same shape as Get Public Page; a missing/wrong token 404s identically to an unknown slug."
         },
         {
           "name": "Delete Page (Admin)",

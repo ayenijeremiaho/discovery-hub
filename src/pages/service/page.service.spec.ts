@@ -302,29 +302,59 @@ describe('PageService', () => {
     });
   });
 
+  function makeExistingPage(overrides: Partial<Page> = {}): Partial<Page> {
+    return {
+      id: 'page-1',
+      slug: 'higher-ground-2026',
+      title: 'Higher Ground 2026',
+      seoDescription: null,
+      ogImageUrl: null,
+      ogImagePublicId: null,
+      sections: [heroSection],
+      isPublished: false,
+      draftTitle: 'Higher Ground 2026',
+      draftSeoDescription: null,
+      draftOgImageUrl: null,
+      draftOgImagePublicId: null,
+      draftSections: [heroSection],
+      previewToken: 'preview-token-1',
+      ...overrides,
+    };
+  }
+
   describe('update', () => {
-    it('leaves sections untouched when omitted', async () => {
-      mockPageRepo.findOneBy.mockResolvedValue({
-        id: 'page-1',
-        slug: 'higher-ground-2026',
-        title: 'Higher Ground 2026',
-        sections: [heroSection],
-        isPublished: false,
+    it('writes title/seoDescription/sections to their draft* counterparts, never live', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(makeExistingPage());
+      await service.update('page-1', {
+        title: 'Updated Title',
+        seoDescription: 'Updated description',
+        sections: [faqSection],
       });
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Higher Ground 2026',
+          seoDescription: null,
+          sections: [heroSection],
+          draftTitle: 'Updated Title',
+          draftSeoDescription: 'Updated description',
+          draftSections: [faqSection],
+        }),
+      );
+    });
+
+    it('leaves draftSections untouched when sections is omitted', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(makeExistingPage());
       await service.update('page-1', { title: 'Updated Title' });
       expect(mockPageRepo.save).toHaveBeenCalledWith(
-        expect.objectContaining({ sections: [heroSection] }),
+        expect.objectContaining({
+          sections: [heroSection],
+          draftSections: [heroSection],
+        }),
       );
     });
 
     it('re-validates sections when provided', async () => {
-      mockPageRepo.findOneBy.mockResolvedValueOnce({
-        id: 'page-1',
-        slug: 'higher-ground-2026',
-        title: 'Higher Ground 2026',
-        sections: [heroSection],
-        isPublished: false,
-      });
+      mockPageRepo.findOneBy.mockResolvedValueOnce(makeExistingPage());
       await expect(
         service.update('page-1', {
           sections: [{ id: 'sec-1', type: PageSectionType.HERO, content: {} }],
@@ -333,13 +363,7 @@ describe('PageService', () => {
     });
 
     it('allows keeping the same slug without a duplicate error', async () => {
-      mockPageRepo.findOneBy.mockResolvedValueOnce({
-        id: 'page-1',
-        slug: 'higher-ground-2026',
-        title: 'Higher Ground 2026',
-        sections: [heroSection],
-        isPublished: false,
-      });
+      mockPageRepo.findOneBy.mockResolvedValueOnce(makeExistingPage());
       await expect(
         service.update('page-1', { slug: 'higher-ground-2026' }),
       ).resolves.toBeDefined();
@@ -348,31 +372,92 @@ describe('PageService', () => {
 
     it('rejects changing the slug to one already used by another page', async () => {
       mockPageRepo.findOneBy
-        .mockResolvedValueOnce({
-          id: 'page-1',
-          slug: 'higher-ground-2026',
-          title: 'Higher Ground 2026',
-          sections: [heroSection],
-          isPublished: false,
-        })
+        .mockResolvedValueOnce(makeExistingPage())
         .mockResolvedValueOnce({ id: 'page-2' });
       await expect(
         service.update('page-1', { slug: 'taken-slug' }),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('publishes a page via isPublished', async () => {
-      mockPageRepo.findOneBy.mockResolvedValueOnce({
-        id: 'page-1',
+    it('slug and isPublished still write live immediately, unlike content fields', async () => {
+      mockPageRepo.findOneBy.mockResolvedValueOnce(makeExistingPage());
+      await service.update('page-1', {
         slug: 'higher-ground-2026',
-        title: 'Higher Ground 2026',
-        sections: [heroSection],
-        isPublished: false,
+        isPublished: true,
       });
-      await service.update('page-1', { isPublished: true });
       expect(mockPageRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ isPublished: true }),
       );
+    });
+  });
+
+  describe('publish', () => {
+    it('copies every draft* field onto its live counterpart and sets isPublished', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          title: 'Old Title',
+          seoDescription: 'Old description',
+          sections: [heroSection],
+          isPublished: false,
+          draftTitle: 'New Title',
+          draftSeoDescription: 'New description',
+          draftSections: [heroSection, faqSection],
+        }),
+      );
+      await service.publish('page-1');
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'New Title',
+          seoDescription: 'New description',
+          sections: [heroSection, faqSection],
+          isPublished: true,
+        }),
+      );
+    });
+
+    it('re-validates draftSections before publishing (e.g. a linked form deleted after the draft was saved)', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          draftSections: [
+            {
+              id: 'sec-1',
+              type: PageSectionType.REGISTRATION,
+              content: { formId: 'deleted-form' },
+            },
+          ],
+        }),
+      );
+      mockFormRepo.findOneBy.mockResolvedValue(null);
+      await expect(service.publish('page-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('deletes the previous live OG image only when publishing actually replaces it', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          ogImagePublicId: 'old-live-public-id',
+          draftOgImageUrl: 'https://cdn/new.png',
+          draftOgImagePublicId: 'new-public-id',
+        }),
+      );
+      await service.publish('page-1');
+      expect(mockCloudinaryService.deleteByPublicId).toHaveBeenCalledWith(
+        'old-live-public-id',
+        'image',
+      );
+    });
+
+    it('does not touch Cloudinary when the OG image is unchanged', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          ogImagePublicId: 'same-public-id',
+          draftOgImageUrl: 'https://cdn/same.png',
+          draftOgImagePublicId: 'same-public-id',
+        }),
+      );
+      await service.publish('page-1');
+      expect(mockCloudinaryService.deleteByPublicId).not.toHaveBeenCalled();
     });
   });
 
@@ -406,15 +491,92 @@ describe('PageService', () => {
     });
   });
 
+  describe('getForPreview', () => {
+    it('returns draft content, not live, when the token matches', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          isPublished: false,
+          title: 'Live Title',
+          sections: [heroSection],
+          draftTitle: 'Draft Title',
+          draftSections: [heroSection, faqSection],
+          previewToken: 'correct-token',
+        }),
+      );
+      const result = await service.getForPreview(
+        'higher-ground-2026',
+        'correct-token',
+      );
+      expect(result).toEqual(
+        expect.objectContaining({
+          title: 'Draft Title',
+          sections: [heroSection, faqSection],
+        }),
+      );
+    });
+
+    it('404s on a wrong token', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({ previewToken: 'correct-token' }),
+      );
+      await expect(
+        service.getForPreview('higher-ground-2026', 'wrong-token'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('404s on a missing token', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({ previewToken: 'correct-token' }),
+      );
+      await expect(
+        service.getForPreview('higher-ground-2026', ''),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('404s for an unknown slug regardless of token', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.getForPreview('missing', 'any-token'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('listPublished', () => {
+    it('returns only published pages, mapped to the minimal shape', async () => {
+      mockPageRepo.find.mockResolvedValue([
+        {
+          slug: 'higher-ground-2026',
+          title: 'Higher Ground 2026',
+          seoDescription: 'A conference',
+          updatedAt: new Date('2026-01-01'),
+        },
+      ]);
+      const result = await service.listPublished();
+      expect(mockPageRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { isPublished: true } }),
+      );
+      expect(result).toEqual([
+        {
+          slug: 'higher-ground-2026',
+          title: 'Higher Ground 2026',
+          seoDescription: 'A conference',
+          updatedAt: new Date('2026-01-01'),
+        },
+      ]);
+    });
+  });
+
   describe('image uploads', () => {
-    it('setOgImage deletes the previous asset only after the new one saves', async () => {
-      mockPageRepo.findOneBy.mockResolvedValue({
-        id: 'page-1',
-        ogImagePublicId: 'old-public-id',
-      });
+    it('setOgImage writes draftOgImage*, not the live columns', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          ogImagePublicId: 'live-public-id',
+          draftOgImagePublicId: 'old-draft-public-id',
+        }),
+      );
       mockCloudinaryService.uploadBuffer.mockResolvedValue({
         secureUrl: 'https://cdn/new.png',
-        publicId: 'new-public-id',
+        publicId: 'new-draft-public-id',
       });
       await service.setOgImage('page-1', {
         buffer: Buffer.from(''),
@@ -422,12 +584,72 @@ describe('PageService', () => {
       } as Express.Multer.File);
       expect(mockPageRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          ogImageUrl: 'https://cdn/new.png',
-          ogImagePublicId: 'new-public-id',
+          ogImagePublicId: 'live-public-id',
+          draftOgImageUrl: 'https://cdn/new.png',
+          draftOgImagePublicId: 'new-draft-public-id',
+        }),
+      );
+    });
+
+    it('deletes the replaced draft image when it differs from the live one', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          ogImagePublicId: 'live-public-id',
+          draftOgImagePublicId: 'old-draft-public-id',
+        }),
+      );
+      mockCloudinaryService.uploadBuffer.mockResolvedValue({
+        secureUrl: 'https://cdn/new.png',
+        publicId: 'new-draft-public-id',
+      });
+      await service.setOgImage('page-1', {
+        buffer: Buffer.from(''),
+        mimetype: 'image/png',
+      } as Express.Multer.File);
+      expect(mockCloudinaryService.deleteByPublicId).toHaveBeenCalledWith(
+        'old-draft-public-id',
+        'image',
+      );
+    });
+
+    it('does NOT delete the replaced draft image when it is still the live image', async () => {
+      // The draft image was never changed since publish, so it's identical
+      // to the live one — uploading a new draft image must not delete the
+      // asset the published page still points at.
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          ogImagePublicId: 'shared-public-id',
+          draftOgImagePublicId: 'shared-public-id',
+        }),
+      );
+      mockCloudinaryService.uploadBuffer.mockResolvedValue({
+        secureUrl: 'https://cdn/new.png',
+        publicId: 'new-draft-public-id',
+      });
+      await service.setOgImage('page-1', {
+        buffer: Buffer.from(''),
+        mimetype: 'image/png',
+      } as Express.Multer.File);
+      expect(mockCloudinaryService.deleteByPublicId).not.toHaveBeenCalled();
+    });
+
+    it('removeOgImage clears draftOgImage* only, guarded the same way', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          ogImagePublicId: 'live-public-id',
+          draftOgImagePublicId: 'old-draft-public-id',
+        }),
+      );
+      await service.removeOgImage('page-1');
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ogImagePublicId: 'live-public-id',
+          draftOgImageUrl: null,
+          draftOgImagePublicId: null,
         }),
       );
       expect(mockCloudinaryService.deleteByPublicId).toHaveBeenCalledWith(
-        'old-public-id',
+        'old-draft-public-id',
         'image',
       );
     });

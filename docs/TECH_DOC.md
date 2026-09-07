@@ -4230,6 +4230,35 @@ content }`, plain `jsonb`, whole-array replace on every save — same convention
 since there's no per-section DB row to diff against). `id` is client-generated (a uuid), not server-assigned —
 sections have no relation of their own for TypeORM to assign an id to.
 
+**Draft/publish split** (`AddPageDraftFields1796540400000`) — `title`, `seoDescription`, `ogImageUrl`/
+`ogImagePublicId`, and `sections` each have a `draft*` counterpart (`draftTitle`, `draftSeoDescription`,
+`draftOgImageUrl`/`draftOgImagePublicId`, `draftSections`). `PageAdminController.update` (`PATCH /pages/:id`)
+writes *only* the `draft*` columns for these four fields — an already-published page can be edited freely, any
+number of times, without a single `PATCH` changing what a visitor sees. `slug` and `isPublished` are the
+exception: both keep writing their live columns immediately, same as before `PATCH` gained this split (slug is a
+URL/identity concern, not content; `isPublished` is a reachability switch, not content either). `POST
+/pages/:id/publish` (`PageService.publish`) is the only thing that copies `draft*` onto the live columns — it
+also sets `isPublished = true`, so it doubles as "publish this for the first time" and "push a pending edit
+live" in one action. `create()` still sets live and draft fields to the same submitted values, since nothing
+live exists yet to protect for a brand-new page.
+
+The one correctness-sensitive detail: `setOgImage`/`removeOgImage` (`POST`/`DELETE /pages/:id/og-image`) now
+write `draftOgImagePublicId`, and only delete the *replaced* Cloudinary asset when that replaced id isn't also
+the current *live* `ogImagePublicId` — otherwise uploading a new draft image would delete the asset the
+published page still points at, before that draft was ever published. `publish()` does the mirror-image cleanup:
+after copying draft onto live, it deletes the *previous* live OG image from Cloudinary if publishing actually
+swapped it for a different one (safe there — nothing else can be pointing at it once that save commits).
+
+**Shareable preview links** — every `Page` also has a `previewToken` (`character varying UNIQUE`, DB-default
+`gen_random_uuid()::text`, generated once per page and never rotated in v1). `GET
+/pages/public/:slug/preview?token=...` (`PageService.getForPreview`) returns the same `PublicPageDto` shape as
+the live public route, sourced from the `draft*` fields instead — no `isPublished` check, so a page that's never
+been published at all is still previewable. A missing/wrong token 404s identically to an unknown slug, same
+"don't reveal which reason" posture the live route already takes for unpublished-vs-nonexistent. The token is
+the only gate: this is a bearer-link model (discuva-admin's "Preview" button builds
+`<liveUrl>?previewToken=<token>`), not an authenticated one — anyone holding the link can view the draft, same
+tradeoff a Figma/Google Docs "anyone with the link" share carries.
+
 **Section toolkit (`PageSectionType`, 8 fixed types)** — `content`'s shape depends on `type`:
 
 | Type | Content shape |
@@ -4265,7 +4294,14 @@ public or admin-managed):
 - `PagePublicController` (`@Public()`, no guard): `GET /pages/public/:slug` — published-only, returns the full
   `Page` including every section verbatim. Unlike Forms' `PublicFormDto`, nothing is stripped — every section is
   content the church chose to show publicly, there's no "spoiler" concern the way an unselected `DROPDOWN`
-  option's `optionMetadata` has. Not rate-limited (read-only, unlike Forms' public write endpoints).
+  option's `optionMetadata` has. Not rate-limited (read-only, unlike Forms' public write endpoints). Also
+  `GET /pages/public/:slug/preview?token=...` (draft content, gated by `previewToken` instead of `isPublished` —
+  see the draft/publish section above) and `GET /pages/public` (every published page for the resolved tenant,
+  `{slug, title, seoDescription, updatedAt}` only — feeds discuva-member's `sitemap.xml`/`robots.txt`/`llms.txt`,
+  described just below). `listPublished` filters on `isPublished` alone (not narrowed by `slug` the way
+  `getForPublic` is), backed by `AddPagesPublishedIndex1796626800000`'s partial index (`WHERE is_published =
+  true`) rather than a full-column one — the `false` side (most pages, most of the time) never needs to appear
+  in it.
 
 `pages:read`/`pages:write` are backfilled onto every existing tenant's `SuperAdmin` role by
 `GrantPagesPermissions1796194800000` (same class of fix as `GrantFormsPermissions`/`GrantSocialMediaPermissions`
@@ -4301,18 +4337,35 @@ header client-side — see that app's own tenant-resolution notes). There's no `
 "every tenant gets a default page" provisioning — a church's first page can be a homepage or a conference page,
 same feature either way; both are natural fast-follows once this is in active use, not built for v1.
 
+**SEO/LLM discoverability (discuva-member)** — `app/p/[slug]/page.tsx` sets `alternates.canonical` and, for a
+non-preview request, injects two JSON-LD `<script type="application/ld+json">` blocks: a `WebPage` schema always,
+and an `FAQPage` schema (mapping each `FAQ` section's `{question, answer}` pairs to `mainEntity`) whenever the
+page has one — a direct match for Google's FAQ rich results and the kind of thing LLM answer engines cite
+directly. No `Event` schema: a `HERO` section's `dateRangeText` is free text ("March 5–7, 2026"), not a real
+date, so there's no reliable `startDate` to populate — that would need the section's content model to gain a
+real structured date field first. Three new tenant-aware routes, all reading the request's `Host` header the
+same way `app/manifest.ts` already does (none of them can be statically generated at build time for that
+reason): `app/sitemap.ts` (`/sitemap.xml`, one entry per published page via `GET /pages/public`), `app/robots.ts`
+(`/robots.txt`, `allow: /p/`, `disallow: /` — everything else is an authenticated member-only screen with
+nothing for a crawler), and `app/llms.txt/route.ts` (`/llms.txt`, an emerging, not-yet-formally-standardized
+convention some LLM crawlers/agents read the way traditional crawlers read `robots.txt` — a markdown summary of
+the tenant's name and its published pages).
+
 | Method | Route | Auth | Notes |
 |--------|-------|------|-------|
 | GET    | `/pages/platform-enabled`   | AdminGuard (PAGES_READ)  | `{ enabled: true }` always — the "Coming Soon" gate; reaching this handler at all already proves access (see above) |
 | POST   | `/pages`                    | AdminGuard (PAGES_WRITE) | Create a page with its sections in one call |
 | GET    | `/pages`                    | AdminGuard (PAGES_READ)  | List all pages — unpaginated, same policy as Forms |
 | GET    | `/pages/:id`                | AdminGuard (PAGES_READ)  | Get one page with sections |
-| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `sections` omitted = untouched, an array = replace wholesale (no per-section id to diff against) |
+| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`sections` write to `draft*` only (an array = replace wholesale, no per-section id to diff against); `slug`/`isPublished` still write live immediately |
 | DELETE | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Delete a page |
+| POST   | `/pages/:id/publish`        | AdminGuard (PAGES_WRITE) | Copies every `draft*` field onto its live counterpart and sets `isPublished = true` |
 | POST   | `/pages/:id/images`         | AdminGuard (PAGES_WRITE) | Multipart, field name `file`, max size `MAX_PAGE_IMAGE_UPLOAD_MB`. Generic upload for any section's image slot — returns `{ url, publicId }` only, doesn't touch the page row |
-| POST   | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Multipart, field name `file`. Sets `Page.ogImageUrl` |
-| DELETE | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Clears the OG image |
+| POST   | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Multipart, field name `file`. Sets `Page.draftOgImageUrl` |
+| DELETE | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Clears the draft OG image |
+| GET    | `/pages/public`             | Public                   | Every published page for the resolved tenant — `{slug, title, seoDescription, updatedAt}` only |
 | GET    | `/pages/public/:slug`       | Public, `404` unless `isPublished` | Returns the full `PublicPageDto` — every section verbatim, nothing stripped |
+| GET    | `/pages/public/:slug/preview` | Public, `?token=` must match `previewToken` | Same `PublicPageDto` shape, sourced from `draft*` — no `isPublished` check |
 
 ### Church Calendar (`src/church-calendar/`)
 

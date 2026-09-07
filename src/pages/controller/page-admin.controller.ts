@@ -82,6 +82,15 @@ export class PageAdminController {
     return this.pageService.update(id, dto);
   }
 
+  // Copies draftTitle/draftSeoDescription/draftOgImage*/draftSections onto
+  // their live counterparts and sets isPublished true — see
+  // PageService.publish's own comment.
+  @RequiresPermission(AdminPermission.PAGES_WRITE)
+  @Post(':id/publish')
+  publish(@Param('id', ParseUUIDPipe) id: string) {
+    return this.pageService.publish(id);
+  }
+
   @RequiresPermission(AdminPermission.PAGES_WRITE)
   @Delete(':id')
   delete(@Param('id', ParseUUIDPipe) id: string) {

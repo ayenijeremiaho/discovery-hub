@@ -30,12 +30,19 @@ export class PageService {
   async create(dto: CreatePageDto): Promise<Page> {
     await this.assertSlugAvailable(dto.slug);
     await this.assertValidSections(dto.sections);
+    // Live and draft start identical — nothing is live yet for a brand-new
+    // page, so there's no content to protect from an in-progress edit the
+    // way update() protects an already-published page (see its own
+    // comment). isPublished still independently gates reachability.
     const page = this.pageRepo.create({
       slug: dto.slug,
       title: dto.title,
       seoDescription: dto.seoDescription ?? null,
       isPublished: dto.isPublished ?? false,
       sections: dto.sections,
+      draftTitle: dto.title,
+      draftSeoDescription: dto.seoDescription ?? null,
+      draftSections: dto.sections,
     });
     return this.pageRepo.save(page);
   }
@@ -68,6 +75,59 @@ export class PageService {
     };
   }
 
+  // The shareable "Preview" link's target — same PublicPageDto shape as
+  // getForPublic, sourced from draft* instead, so an admin sees exactly
+  // what a visitor will see once they publish. No isPublished check: a
+  // page that's never been published at all is still previewable. The
+  // token is the only gate — anyone without it gets the same 404 a
+  // nonexistent slug would, same "don't reveal which reason" posture
+  // getForPublic already takes for unpublished vs. nonexistent.
+  async getForPreview(slug: string, token: string): Promise<PublicPageDto> {
+    const page = await this.pageRepo.findOneBy({ slug });
+    if (!page || !token || page.previewToken !== token) {
+      throw new NotFoundException('Page not found');
+    }
+    return {
+      id: page.id,
+      slug: page.slug,
+      title: page.draftTitle,
+      seoDescription: page.draftSeoDescription,
+      ogImageUrl: page.draftOgImageUrl,
+      sections: page.draftSections,
+    };
+  }
+
+  // Feeds discuva-member's sitemap/robots/llms.txt routes — every published
+  // page for the tenant resolved by TenantMiddleware off the incoming
+  // request, same as getForPublic. Deliberately minimal: only what a
+  // crawler/LLM index actually needs, never draft content or the token.
+  async listPublished(): Promise<
+    {
+      slug: string;
+      title: string;
+      seoDescription: string | null;
+      updatedAt: Date;
+    }[]
+  > {
+    const pages = await this.pageRepo.find({
+      where: { isPublished: true },
+      order: { updatedAt: 'DESC' },
+    });
+    return pages.map((p) => ({
+      slug: p.slug,
+      title: p.title,
+      seoDescription: p.seoDescription,
+      updatedAt: p.updatedAt,
+    }));
+  }
+
+  // title/seoDescription/sections write to their draft* counterparts only —
+  // an already-published page can be edited freely without a single Save
+  // changing what a visitor sees. slug and isPublished are the exception:
+  // slug is a URL/identity concern, not content, and isPublished is a
+  // reachability switch, not content either — both keep writing live
+  // immediately, same as before. publish() is what copies draft* onto the
+  // live columns.
   async update(id: string, dto: UpdatePageDto): Promise<Page> {
     const page = await this.getById(id);
 
@@ -75,17 +135,47 @@ export class PageService {
       await this.assertSlugAvailable(dto.slug, id);
       page.slug = dto.slug;
     }
-    if (dto.title !== undefined) page.title = dto.title;
+    if (dto.title !== undefined) page.draftTitle = dto.title;
     if (dto.seoDescription !== undefined) {
-      page.seoDescription = dto.seoDescription;
+      page.draftSeoDescription = dto.seoDescription;
     }
     if (dto.isPublished !== undefined) page.isPublished = dto.isPublished;
     if (dto.sections !== undefined) {
       await this.assertValidSections(dto.sections);
-      page.sections = dto.sections;
+      page.draftSections = dto.sections;
     }
 
     return this.pageRepo.save(page);
+  }
+
+  // Copies every draft* field onto its live counterpart and marks the page
+  // reachable — the only place draftSections/draftTitle/etc. ever reach a
+  // real visitor. Deletes the previous live OG image from Cloudinary if
+  // publishing swaps it for a different one (safe here — nothing else
+  // could still be pointing at it once this save commits).
+  async publish(id: string): Promise<Page> {
+    const page = await this.getById(id);
+    await this.assertValidSections(page.draftSections);
+
+    const previousOgImagePublicId = page.ogImagePublicId;
+
+    page.title = page.draftTitle;
+    page.seoDescription = page.draftSeoDescription;
+    page.ogImageUrl = page.draftOgImageUrl;
+    page.ogImagePublicId = page.draftOgImagePublicId;
+    page.sections = page.draftSections;
+    page.isPublished = true;
+
+    const saved = await this.pageRepo.save(page);
+
+    if (
+      previousOgImagePublicId &&
+      previousOgImagePublicId !== saved.ogImagePublicId
+    ) {
+      this.cloudinaryService.deleteByPublicId(previousOgImagePublicId, 'image');
+    }
+
+    return saved;
   }
 
   async delete(id: string): Promise<void> {
@@ -252,32 +342,43 @@ export class PageService {
 
   // Mirrors FormService.setCoverImage's "delete the previous asset only
   // after the new one is safely saved" ordering.
+  // Writes draftOgImagePublicId, not the live column — see update()'s own
+  // comment. The replaced image is only deleted from Cloudinary if it isn't
+  // ALSO the current live ogImagePublicId; otherwise the still-published
+  // page would lose its image the moment a draft replacement is uploaded,
+  // before that draft is ever published.
   async setOgImage(id: string, file: Express.Multer.File): Promise<Page> {
     const page = await this.getById(id);
-    const previousPublicId = page.ogImagePublicId;
+    const previousDraftPublicId = page.draftOgImagePublicId;
     const uploaded = await this.cloudinaryService.uploadBuffer(
       file.buffer,
       'page-images',
       undefined,
       file.mimetype,
     );
-    page.ogImageUrl = uploaded.secureUrl;
-    page.ogImagePublicId = uploaded.publicId;
+    page.draftOgImageUrl = uploaded.secureUrl;
+    page.draftOgImagePublicId = uploaded.publicId;
     const saved = await this.pageRepo.save(page);
-    if (previousPublicId) {
-      this.cloudinaryService.deleteByPublicId(previousPublicId, 'image');
+    if (
+      previousDraftPublicId &&
+      previousDraftPublicId !== saved.ogImagePublicId
+    ) {
+      this.cloudinaryService.deleteByPublicId(previousDraftPublicId, 'image');
     }
     return saved;
   }
 
   async removeOgImage(id: string): Promise<Page> {
     const page = await this.getById(id);
-    const previousPublicId = page.ogImagePublicId;
-    page.ogImageUrl = null;
-    page.ogImagePublicId = null;
+    const previousDraftPublicId = page.draftOgImagePublicId;
+    page.draftOgImageUrl = null;
+    page.draftOgImagePublicId = null;
     const saved = await this.pageRepo.save(page);
-    if (previousPublicId) {
-      this.cloudinaryService.deleteByPublicId(previousPublicId, 'image');
+    if (
+      previousDraftPublicId &&
+      previousDraftPublicId !== saved.ogImagePublicId
+    ) {
+      this.cloudinaryService.deleteByPublicId(previousDraftPublicId, 'image');
     }
     return saved;
   }
