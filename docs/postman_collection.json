@@ -309,6 +309,11 @@
       "key": "ssQuestionId",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "testimonialSubmissionId",
+      "value": "",
+      "type": "string"
     }
   ],
   "auth": {
@@ -10574,7 +10579,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground Conference 2026\",\n  \"seoDescription\": \"Three days of worship and teaching \\u2014 August 28-30, 2026.\",\n  \"isPublished\": false,\n  \"sections\": [\n    {\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"type\": \"HERO\",\n      \"content\": {\n        \"title\": \"Higher Ground 2026\",\n        \"subtitle\": \"Get empowered to be transformed.\",\n        \"dateRangeText\": \"August 28-30, 2026\",\n        \"ctaLabel\": \"Register Now\",\n        \"ctaUrl\": \"#register\"\n      }\n    },\n    {\n      \"id\": \"22222222-2222-4222-8222-222222222222\",\n      \"type\": \"REGISTRATION\",\n      \"content\": {\n        \"heading\": \"Reserve Your Seat\",\n        \"formId\": \"{{formId}}\",\n        \"ctaLabel\": \"Register\"\n      }\n    },\n    {\n      \"id\": \"33333333-3333-4333-8333-333333333333\",\n      \"type\": \"FAQ\",\n      \"content\": {\n        \"items\": [\n          {\n            \"question\": \"Is parking available?\",\n            \"answer\": \"Yes, free parking on-site.\"\n          }\n        ]\n      }\n    }\n  ]\n}",
+              "raw": "{\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground Conference 2026\",\n  \"seoDescription\": \"Three days of worship and teaching \\u2014 August 28-30, 2026.\",\n  \"isPublished\": false,\n  \"theme\": \"bold\",\n  \"accentColor\": \"#f97316\",\n  \"sections\": [\n    {\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"type\": \"HERO\",\n      \"content\": {\n        \"title\": \"Higher Ground 2026\",\n        \"subtitle\": \"Get empowered to be transformed.\",\n        \"dateRangeText\": \"August 28-30, 2026\",\n        \"ctaLabel\": \"Register Now\",\n        \"ctaUrl\": \"#register\"\n      }\n    },\n    {\n      \"id\": \"44444444-4444-4444-8444-444444444444\",\n      \"type\": \"SPEAKERS\",\n      \"content\": {\n        \"heading\": \"Ministering\",\n        \"items\": [\n          {\n            \"name\": \"Pastor Jane Doe\",\n            \"title\": \"Host & Senior Pastor\",\n            \"isHost\": true\n          },\n          {\n            \"name\": \"Apostle John Smith\",\n            \"title\": \"Guest Speaker\"\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"55555555-5555-4555-8555-555555555555\",\n      \"type\": \"MERCH\",\n      \"content\": {\n        \"heading\": \"Merch\",\n        \"imageUrl\": \"https://res.cloudinary.com/example/merch-flyer.png\",\n        \"linkLabel\": \"Pre-order Now\",\n        \"linkUrl\": \"https://shop.example.com\"\n      }\n    },\n    {\n      \"id\": \"22222222-2222-4222-8222-222222222222\",\n      \"type\": \"REGISTRATION\",\n      \"content\": {\n        \"heading\": \"Reserve Your Seat\",\n        \"formId\": \"{{formId}}\",\n        \"ctaLabel\": \"Register\"\n      }\n    },\n    {\n      \"id\": \"66666666-6666-4666-8666-666666666666\",\n      \"type\": \"TESTIMONIALS\",\n      \"content\": {\n        \"heading\": \"What Are You Believing For?\",\n        \"acceptSubmissions\": true,\n        \"items\": [\n          {\n            \"quote\": \"This conference changed my life.\",\n            \"name\": \"A previous attendee\"\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"33333333-3333-4333-8333-333333333333\",\n      \"type\": \"FAQ\",\n      \"content\": {\n        \"items\": [\n          {\n            \"question\": \"Is parking available?\",\n            \"answer\": \"Yes, free parking on-site.\"\n          }\n        ]\n      }\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -10662,7 +10667,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"title\": \"Higher Ground 2026 (Updated)\"\n}",
+              "raw": "{\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"theme\": \"bold\",\n  \"accentColor\": \"#f97316\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -10678,7 +10683,7 @@
               "body": "{\n  \"id\": \"{{pageId}}\",\n  \"title\": \"Higher Ground 2026\",\n  \"draftTitle\": \"Higher Ground 2026 (Updated)\"\n}"
             }
           ],
-          "description": "title/seoDescription/sections write to their draft* counterparts only \u2014 an already-published page can be edited without changing what a visitor sees. slug and isPublished still write live immediately. Use POST /pages/:id/publish to push draft content live."
+          "description": "title/seoDescription/theme/accentColor/sections write to their draft* counterparts only \u2014 an already-published page can be edited without changing what a visitor sees. slug and isPublished still write live immediately. Use POST /pages/:id/publish to push draft content live."
         },
         {
           "name": "Publish Page (Admin)",
@@ -10706,6 +10711,81 @@
             }
           ],
           "description": "Copies every draft* field (draftTitle, draftSeoDescription, draftOgImageUrl/draftOgImagePublicId, draftSections) onto its live counterpart and sets isPublished = true. The only thing that ever moves draft content onto the live page."
+        },
+        {
+          "name": "List Testimonial Submissions (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pages/{{pageId}}/testimonial-submissions?status=PENDING",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "{{pageId}}",
+                "testimonial-submissions"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "[\n  {\n    \"id\": \"{{testimonialSubmissionId}}\",\n    \"sectionId\": \"66666666-6666-4666-8666-666666666666\",\n    \"quote\": \"It changed my life.\",\n    \"name\": \"Sam\",\n    \"status\": \"PENDING\",\n    \"createdAt\": \"2026-08-01T00:00:00.000Z\"\n  }\n]"
+            }
+          ],
+          "description": "Moderation queue for a TESTIMONIALS section with acceptSubmissions on. status is optional (PENDING/APPROVED/REJECTED)."
+        },
+        {
+          "name": "Moderate Testimonial Submission (Admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pages/{{pageId}}/testimonial-submissions/{{testimonialSubmissionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "{{pageId}}",
+                "testimonial-submissions",
+                "{{testimonialSubmissionId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"id\": \"{{testimonialSubmissionId}}\",\n  \"status\": \"APPROVED\"\n}"
+            }
+          ],
+          "description": "status must be APPROVED or REJECTED. Only APPROVED submissions are merged into the TESTIMONIALS section's content.items on the public/preview routes."
         },
         {
           "name": "Upload Page Section Image (Admin)",
@@ -10908,6 +10988,54 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Submit Testimonial (Public)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pages/public/{{pageSlug}}/testimonials",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "public",
+                "{{pageSlug}}",
+                "testimonials"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sectionId\": \"66666666-6666-4666-8666-666666666666\",\n  \"quote\": \"It changed my life.\",\n  \"name\": \"Sam\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "202 Accepted",
+              "status": "Accepted",
+              "code": 202,
+              "body": ""
+            },
+            {
+              "name": "400 section not accepting submissions",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"statusCode\": 400,\n  \"message\": \"This page is not accepting testimonial submissions\"\n}"
+            }
+          ],
+          "description": "No auth required \u2014 rate-limited (5/min). Rejected outright unless sectionId is a TESTIMONIALS section on this exact page with acceptSubmissions on. Always lands PENDING."
         }
       ]
     },

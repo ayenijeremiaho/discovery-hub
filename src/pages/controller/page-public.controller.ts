@@ -1,8 +1,19 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../auth/decorator/public.decorator';
 import { RequiresModule } from '../../church-settings/decorator/requires-module.decorator';
 import { ModuleEnabledGuard } from '../../church-settings/guard/module-enabled.guard';
 import { PageService } from '../service/page.service';
+import { SubmitTestimonialDto } from '../dto/page.dto';
 
 // No login required — a page is a public marketing surface by definition
 // (shared in an ad, etc.). ModuleEnabledGuard still applies: it keys off
@@ -40,5 +51,19 @@ export class PagePublicController {
   @Get(':slug/preview')
   getPreview(@Param('slug') slug: string, @Query('token') token: string) {
     return this.pageService.getForPreview(slug, token);
+  }
+
+  // Rate-limited — this is an open, unauthenticated write endpoint (same
+  // convention as FormPublicController's submit route). Always lands as
+  // PENDING; PageService.submitTestimonial rejects it outright unless the
+  // referenced section is a TESTIMONIALS section with acceptSubmissions on.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(202)
+  @Post(':slug/testimonials')
+  submitTestimonial(
+    @Param('slug') slug: string,
+    @Body() dto: SubmitTestimonialDto,
+  ) {
+    return this.pageService.submitTestimonial(slug, dto);
   }
 }

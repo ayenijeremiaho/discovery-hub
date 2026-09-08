@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TenantTypeOrmModule } from '../tenant/utility/tenant-typeorm.module';
 import { Page } from './entity/page.entity';
+import { TestimonialSubmission } from './entity/testimonial-submission.entity';
 import { Form } from '../forms/entity/form.entity';
 import { PageService } from './service/page.service';
 import { PageAdminController } from './controller/page-admin.controller';
@@ -13,7 +14,7 @@ import { AdminModule } from '../admin/admin.module';
     // Form is registered here too (not imported via FormsModule) purely so
     // PageService can look up a REGISTRATION section's formId — no other
     // Forms provider is needed.
-    TenantTypeOrmModule.forFeature([Page, Form]),
+    TenantTypeOrmModule.forFeature([Page, Form, TestimonialSubmission]),
     UtilityModule,
     AdminModule,
   ],

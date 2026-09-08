@@ -4259,18 +4259,31 @@ the only gate: this is a bearer-link model (discuva-admin's "Preview" button bui
 `<liveUrl>?previewToken=<token>`), not an authenticated one — anyone holding the link can view the draft, same
 tradeoff a Figma/Google Docs "anyone with the link" share carries.
 
-**Section toolkit (`PageSectionType`, 8 fixed types)** — `content`'s shape depends on `type`:
+**Page-level theme + accent color** (`AddPageThemeFields1796713200000`) — `theme` (`character varying`, default
+`'minimal'`) and `accentColor` (nullable hex string), each with a `draft*` counterpart following the exact same
+draft/publish routing as every other content field above: `PATCH` writes `draftTheme`/`draftAccentColor` only,
+`publish()` copies both onto the live columns. `theme` is a whole-*page* choice, not per-section — `'minimal'` is
+the original look (unchanged) and every page defaults to it; `'bold'` is a dark background with bold/uppercase
+headings, with `accentColor` picked out for emphasis (borders, badges, buttons, the active FAQ question, the
+Speakers "Host" badge) across every section type. Validated at the DTO layer only (`@IsIn(['minimal', 'bold'])`,
+`@IsHexColor()`), not in `assertValidSections` — it isn't per-section content. Rendering lives entirely in
+discuva-member's `SectionRenderer` (see that repo): each section function branches its own classes on `theme`,
+and a runtime `accentColor` is applied via inline `style={{ color / borderColor: accentColor }}`, never a
+Tailwind bracket class (Tailwind's JIT can't statically extract a class from a value only known at render time).
+
+**Section toolkit (`PageSectionType`, 9 fixed types)** — `content`'s shape depends on `type`:
 
 | Type | Content shape |
 |---|---|
 | `HERO` | `title, subtitle?, dateRangeText?, backgroundImageUrl?, ctaLabel?, ctaUrl?` (`ctaLabel`/`ctaUrl` paired — both or neither) |
-| `ABOUT` | `heading, body, imageUrl?` |
+| `ABOUT` | `heading, body, imageUrl?, layout? ('stacked' \| 'split'), imagePosition? ('left' \| 'right')`. `layout` defaults to `'stacked'` (image above centered text, unchanged); `'split'` is a two-column layout (text one side, image filling the other — falls back to `'stacked'` client-side if there's no image to split against). `imagePosition` only matters when `layout` is `'split'`, defaulting to `'right'` |
 | `STATS` | `items: { label, value }[]` (≥1) |
-| `SPEAKERS` | `heading?, items: { name, title?, photoUrl? }[]` (≥1) |
+| `SPEAKERS` | `heading?, items: { name, title?, photoUrl?, isHost? }[]` (≥1). At most one item should be `isHost: true` — rendered as a larger, featured card above the regular grid instead of inside it (not validated server-side, same "harmless if malformed" precedent `HERO`'s `hideOverlayText` sets: if more than one item claims it, only the first counts, the rest fall back into the grid) |
 | `SCHEDULE` | `heading?, days: { label, entries: { time?, title }[] }[]` (≥1 day, each with ≥1 entry) |
-| `REGISTRATION` | `heading?, body?, formId, ctaLabel?` — embeds an existing `Form` inline (rendered client-side via the same `FormFillFields`/`PaginatedFormFillFields` components a form's own public fill page already uses) rather than reimplementing registration. Reuses the whole Forms feature (validation, dedup, notifications, `postSubmitOutcomes`) for free |
-| `TESTIMONIALS` | `heading?, items: { quote, name?, photoUrl? }[]` (≥1) |
+| `REGISTRATION` | `heading?, body?, formId, ctaLabel?` — embeds an existing `Form` inline (rendered client-side via the same `FormFillFields`/`PaginatedFormFillFields` components a form's own public fill page already uses) rather than reimplementing registration. Reuses the whole Forms feature (validation, dedup, notifications, `postSubmitOutcomes`) for free. A page may carry more than one `REGISTRATION` section (e.g. event registration and a separate merch pre-order form) — nothing restricts it, each is independent with its own `heading`/`body`/`formId` |
+| `TESTIMONIALS` | `heading?, items: { quote, name?, photoUrl? }[]` (≥1), `acceptSubmissions?: boolean`. When `acceptSubmissions` is on, a visitor can submit their own testimony from the public page (see "Visitor-submitted testimonials" below) — approved ones are merged into `items` server-side, so `items` returned by the public/preview routes may be longer than what was saved |
 | `FAQ` | `heading?, items: { question, answer }[]` (≥1) |
+| `MERCH` | `heading?, imageUrl, linkLabel?, linkUrl?` (`linkLabel`/`linkUrl` paired — both or neither) — a single promotional image/poster plus an optional CTA link, e.g. a merch flyer or a pre-order banner |
 
 **Validation is envelope-only at the DTO layer** (`PageSectionDto`: `id`/`type`/`content` as a plain object) —
 per-type structural validation happens in `PageService.assertValidSections`, a `switch (section.type)` checking
@@ -4330,6 +4343,22 @@ created a page to view publicly anyway. `PageAdminController`'s `GET /pages/:id`
 `PagePublicController` is registered first in `PagesModule.controllers` — otherwise it would swallow
 `GET /pages/public/:slug`, the same route-ordering issue `FormsModule` already documents.
 
+**Visitor-submitted testimonials** (`CreateTestimonialSubmissionsTable1796799600000`) — a `TestimonialSubmission`
+entity (`page` FK `ON DELETE CASCADE`, `sectionId` — the section's client-generated jsonb id, not a real FK since
+sections aren't DB rows — `quote`, nullable `name`, `status` defaulting to `'PENDING'`, indexed on
+`(page, status)`) lets a visitor submit their own testimony on a `TESTIMONIALS` section that has
+`content.acceptSubmissions: true`. `PageService.submitTestimonial` (public, unauthenticated) rejects outright
+unless the referenced `sectionId` actually exists on that exact page and is a `TESTIMONIALS` section with
+`acceptSubmissions` on — a stale or guessed `sectionId` can't attach a submission to a section that never opted
+in. Every submission lands `PENDING`; an admin approves or rejects it via `listTestimonialSubmissions`/
+`moderateTestimonialSubmission`. Only `APPROVED` rows ever reach a visitor — `getForPublic`/`getForPreview` merge
+them (mapped to `{ quote, name }`, no photo — public submission never accepts an image upload) onto the relevant
+section's `content.items` *server-side*, on every request, so discuva-member's rendering needs no second fetch:
+it just sees a possibly-longer `items` array. The submit endpoint follows the app's one established public-write
+convention exactly — `@Public()` + `@Throttle({ default: { limit: 5, ttl: 60_000 } })`, the same pattern
+`FormPublicController`'s submit route already uses; there is no CAPTCHA/honeypot convention anywhere in this
+codebase, so none was introduced here either.
+
 **No custom-domain resolution, no auto-provisioned homepage.** A page is reachable at
 `member.<church-subdomain>.<baseDomain>/p/<slug>` today, resolved the same way `discuva-member`'s existing public
 form-fill pages resolve tenant (subdomain read from the `Host` header server-side, or the `X-Tenant-Subdomain`
@@ -4357,15 +4386,18 @@ the tenant's name and its published pages).
 | POST   | `/pages`                    | AdminGuard (PAGES_WRITE) | Create a page with its sections in one call |
 | GET    | `/pages`                    | AdminGuard (PAGES_READ)  | List all pages — unpaginated, same policy as Forms |
 | GET    | `/pages/:id`                | AdminGuard (PAGES_READ)  | Get one page with sections |
-| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`sections` write to `draft*` only (an array = replace wholesale, no per-section id to diff against); `slug`/`isPublished` still write live immediately |
+| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`theme`/`accentColor`/`sections` write to `draft*` only (an array = replace wholesale, no per-section id to diff against); `slug`/`isPublished` still write live immediately |
 | DELETE | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Delete a page |
 | POST   | `/pages/:id/publish`        | AdminGuard (PAGES_WRITE) | Copies every `draft*` field onto its live counterpart and sets `isPublished = true` |
 | POST   | `/pages/:id/images`         | AdminGuard (PAGES_WRITE) | Multipart, field name `file`, max size `MAX_PAGE_IMAGE_UPLOAD_MB`. Generic upload for any section's image slot — returns `{ url, publicId }` only, doesn't touch the page row |
 | POST   | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Multipart, field name `file`. Sets `Page.draftOgImageUrl` |
 | DELETE | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Clears the draft OG image |
+| GET    | `/pages/:id/testimonial-submissions` | AdminGuard (PAGES_READ) | Optional `?status=PENDING\|APPROVED\|REJECTED`. Moderation queue for a `TESTIMONIALS` section with `acceptSubmissions` on |
+| PATCH  | `/pages/:id/testimonial-submissions/:submissionId` | AdminGuard (PAGES_WRITE) | Body `{ status: 'APPROVED' \| 'REJECTED' }` |
 | GET    | `/pages/public`             | Public                   | Every published page for the resolved tenant — `{slug, title, seoDescription, updatedAt}` only |
-| GET    | `/pages/public/:slug`       | Public, `404` unless `isPublished` | Returns the full `PublicPageDto` — every section verbatim, nothing stripped |
+| GET    | `/pages/public/:slug`       | Public, `404` unless `isPublished` | Returns the full `PublicPageDto` (now including `theme`/`accentColor`) — every section verbatim, nothing stripped |
 | GET    | `/pages/public/:slug/preview` | Public, `?token=` must match `previewToken` | Same `PublicPageDto` shape, sourced from `draft*` — no `isPublished` check |
+| POST   | `/pages/public/:slug/testimonials` | Public, rate-limited (5/min) | Body `{ sectionId, quote, name? }`. `202`, no content. Lands `PENDING` — rejected outright unless `sectionId` is a `TESTIMONIALS` section on this page with `acceptSubmissions` on |
 
 ### Church Calendar (`src/church-calendar/`)
 

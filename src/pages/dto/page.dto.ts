@@ -4,15 +4,28 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsHexColor,
+  IsIn,
   IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { PageSectionType } from '../enum/page.enum';
+import {
+  PageSectionType,
+  TestimonialSubmissionStatus,
+} from '../enum/page.enum';
+
+// Not a real schema constraint — DTO-level only, same reasoning
+// PageSectionType's own file comment gives for `content` being jsonb: the
+// theme toolkit is fixed today (two whole-page looks), not something a
+// migration is needed to extend later.
+export const PAGE_THEMES = ['minimal', 'bold'] as const;
+export type PageTheme = (typeof PAGE_THEMES)[number];
 
 // Envelope-only validation — `content`'s shape depends on `type`, and this
 // codebase's existing jsonb-content precedents (Form.optionMetadata,
@@ -55,6 +68,14 @@ export class CreatePageDto {
   @IsBoolean()
   isPublished?: boolean;
 
+  @IsOptional()
+  @IsIn(PAGE_THEMES)
+  theme?: PageTheme;
+
+  @IsOptional()
+  @IsHexColor()
+  accentColor?: string | null;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PageSectionDto)
@@ -82,6 +103,14 @@ export class UpdatePageDto {
   @IsBoolean()
   isPublished?: boolean;
 
+  @IsOptional()
+  @IsIn(PAGE_THEMES)
+  theme?: PageTheme;
+
+  @IsOptional()
+  @IsHexColor()
+  accentColor?: string | null;
+
   // Omitted = leave untouched; an array = replace the whole list wholesale
   // — same convention as Form.postSubmitOutcomes on UpdateFormDto (there's
   // no per-section id to diff against).
@@ -91,6 +120,30 @@ export class UpdatePageDto {
   @ValidateNested({ each: true })
   @Type(() => PageSectionDto)
   sections?: PageSectionDto[];
+}
+
+export class SubmitTestimonialDto {
+  @IsUUID()
+  sectionId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  quote: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string;
+}
+
+export class ModerateTestimonialSubmissionDto {
+  @IsIn([
+    TestimonialSubmissionStatus.APPROVED,
+    TestimonialSubmissionStatus.REJECTED,
+  ])
+  status:
+    TestimonialSubmissionStatus.APPROVED | TestimonialSubmissionStatus.REJECTED;
 }
 
 // What GET pages/public/:slug returns. Unlike Forms' PublicFormDto, nothing
@@ -103,6 +156,8 @@ export interface PublicPageDto {
   title: string;
   seoDescription: string | null;
   ogImageUrl: string | null;
+  theme: PageTheme;
+  accentColor: string | null;
   sections: {
     id: string;
     type: PageSectionType;

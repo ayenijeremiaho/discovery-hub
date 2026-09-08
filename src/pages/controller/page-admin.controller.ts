@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -22,7 +23,12 @@ import { DynamicLimitedFileInterceptor } from '../../utility/interceptors/dynami
 import { PlatformSettingKey } from '../../platform-admin/enum/platform-setting-key.enum';
 import { UPLOAD_HARD_CEILING_BYTES } from '../../platform-admin/constant/known-platform-settings.constant';
 import { PageService } from '../service/page.service';
-import { CreatePageDto, UpdatePageDto } from '../dto/page.dto';
+import {
+  CreatePageDto,
+  ModerateTestimonialSubmissionDto,
+  UpdatePageDto,
+} from '../dto/page.dto';
+import { TestimonialSubmissionStatus } from '../enum/page.enum';
 
 function imageOnlyFilter(
   _req: Express.Request,
@@ -140,5 +146,31 @@ export class PageAdminController {
   @Delete(':id/og-image')
   removeOgImage(@Param('id', ParseUUIDPipe) id: string) {
     return this.pageService.removeOgImage(id);
+  }
+
+  // Moderation queue for a TESTIMONIALS section with acceptSubmissions —
+  // see PageService.withApprovedTestimonials for how an APPROVED row
+  // surfaces on the public page.
+  @RequiresPermission(AdminPermission.PAGES_READ)
+  @Get(':id/testimonial-submissions')
+  listTestimonialSubmissions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('status') status?: TestimonialSubmissionStatus,
+  ) {
+    return this.pageService.listTestimonialSubmissions(id, status);
+  }
+
+  @RequiresPermission(AdminPermission.PAGES_WRITE)
+  @Patch(':id/testimonial-submissions/:submissionId')
+  moderateTestimonialSubmission(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('submissionId', ParseUUIDPipe) submissionId: string,
+    @Body() dto: ModerateTestimonialSubmissionDto,
+  ) {
+    return this.pageService.moderateTestimonialSubmission(
+      id,
+      submissionId,
+      dto,
+    );
   }
 }

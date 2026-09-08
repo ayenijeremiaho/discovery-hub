@@ -14,4 +14,16 @@ export enum PageSectionType {
   REGISTRATION = 'REGISTRATION',
   TESTIMONIALS = 'TESTIMONIALS',
   FAQ = 'FAQ',
+  // A single promotional image/poster plus an optional CTA link — e.g. a
+  // merch flyer or a pre-order banner.
+  MERCH = 'MERCH',
+}
+
+// The only status values allowed for TestimonialSubmission.status — plain
+// string column, never a native PG enum, matching every other status field
+// in this codebase.
+export enum TestimonialSubmissionStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
 }

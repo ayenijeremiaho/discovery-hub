@@ -86,4 +86,25 @@ export class Page extends BaseEntity {
   // PublicPageDto — only the admin-facing response DTO includes it.
   @Column({ name: 'preview_token', unique: true })
   previewToken: string;
+
+  // 'minimal' (default, today's thin/light/white look, unchanged) or
+  // 'bold' (dark background, bold/uppercase headings, accentColor picked
+  // out for emphasis) — a whole-page choice, not per-section, so every
+  // section renders one consistent visual language. See
+  // SectionRenderer on the member app side for how each section branches
+  // on this.
+  @Column({ default: 'minimal' })
+  theme: string;
+
+  // Only meaningful when theme is 'bold' — a hex color used for borders,
+  // badges, active states, and buttons across every section. Null under
+  // 'minimal', where nothing needs an accent color.
+  @Column({ name: 'accent_color', nullable: true })
+  accentColor: string | null;
+
+  @Column({ name: 'draft_theme', default: 'minimal' })
+  draftTheme: string;
+
+  @Column({ name: 'draft_accent_color', nullable: true })
+  draftAccentColor: string | null;
 }

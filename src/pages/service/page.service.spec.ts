@@ -3,8 +3,12 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PageService } from './page.service';
 import { Page } from '../entity/page.entity';
+import { TestimonialSubmission } from '../entity/testimonial-submission.entity';
 import { Form } from '../../forms/entity/form.entity';
-import { PageSectionType } from '../enum/page.enum';
+import {
+  PageSectionType,
+  TestimonialSubmissionStatus,
+} from '../enum/page.enum';
 import { CloudinaryService } from '../../utility/service/cloudinary.service';
 import { CreatePageDto } from '../dto/page.dto';
 
@@ -18,6 +22,12 @@ const mockPageRepo = {
 const mockFormRepo = {
   findOneBy: jest.fn(),
 };
+const mockTestimonialSubmissionRepo = {
+  create: jest.fn((v) => v),
+  save: jest.fn((v) => Promise.resolve({ id: 'submission-1', ...v })),
+  find: jest.fn().mockResolvedValue([]),
+  findOneBy: jest.fn(),
+};
 const mockCloudinaryService = {
   uploadBuffer: jest.fn(),
   deleteByPublicId: jest.fn(),
@@ -28,11 +38,16 @@ describe('PageService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockTestimonialSubmissionRepo.find.mockResolvedValue([]);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PageService,
         { provide: getRepositoryToken(Page), useValue: mockPageRepo },
         { provide: getRepositoryToken(Form), useValue: mockFormRepo },
+        {
+          provide: getRepositoryToken(TestimonialSubmission),
+          useValue: mockTestimonialSubmissionRepo,
+        },
         { provide: CloudinaryService, useValue: mockCloudinaryService },
       ],
     }).compile();
@@ -300,6 +315,126 @@ describe('PageService', () => {
         ),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('accepts an ABOUT section with a valid split layout + image position', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.ABOUT,
+                content: {
+                  heading: 'About',
+                  body: 'Body',
+                  imageUrl: 'https://cdn/img.png',
+                  layout: 'split',
+                  imagePosition: 'left',
+                },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('rejects an ABOUT section with an invalid layout value', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.ABOUT,
+                content: { heading: 'About', body: 'Body', layout: 'sideways' },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a MERCH section missing imageUrl', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              { id: 'sec-1', type: PageSectionType.MERCH, content: {} },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a MERCH section with linkLabel but no linkUrl', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.MERCH,
+                content: {
+                  imageUrl: 'https://cdn/merch.png',
+                  linkLabel: 'Shop now',
+                },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('accepts a valid MERCH section', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.MERCH,
+                content: {
+                  imageUrl: 'https://cdn/merch.png',
+                  linkLabel: 'Shop now',
+                  linkUrl: 'https://shop.example.com',
+                },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('defaults theme to minimal and accentColor to null when omitted', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await service.create(makeDto());
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          theme: 'minimal',
+          accentColor: null,
+          draftTheme: 'minimal',
+          draftAccentColor: null,
+        }),
+      );
+    });
+
+    it('sets theme/accentColor on both live and draft when provided', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await service.create(makeDto({ theme: 'bold', accentColor: '#f97316' }));
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          theme: 'bold',
+          accentColor: '#f97316',
+          draftTheme: 'bold',
+          draftAccentColor: '#f97316',
+        }),
+      );
+    });
   });
 
   function makeExistingPage(overrides: Partial<Page> = {}): Partial<Page> {
@@ -389,6 +524,21 @@ describe('PageService', () => {
         expect.objectContaining({ isPublished: true }),
       );
     });
+
+    it('routes theme/accentColor to draftTheme/draftAccentColor, not live', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({ theme: 'minimal', accentColor: null }),
+      );
+      await service.update('page-1', { theme: 'bold', accentColor: '#f97316' });
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          theme: 'minimal',
+          accentColor: null,
+          draftTheme: 'bold',
+          draftAccentColor: '#f97316',
+        }),
+      );
+    });
   });
 
   describe('publish', () => {
@@ -458,6 +608,21 @@ describe('PageService', () => {
       );
       await service.publish('page-1');
       expect(mockCloudinaryService.deleteByPublicId).not.toHaveBeenCalled();
+    });
+
+    it('copies draftTheme/draftAccentColor onto the live columns', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          theme: 'minimal',
+          accentColor: null,
+          draftTheme: 'bold',
+          draftAccentColor: '#f97316',
+        }),
+      );
+      await service.publish('page-1');
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ theme: 'bold', accentColor: '#f97316' }),
+      );
     });
   });
 
@@ -669,6 +834,184 @@ describe('PageService', () => {
         publicId: 'speaker-public-id',
       });
       expect(mockPageRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  const testimonialsSection = {
+    id: 'sec-testimonials',
+    type: PageSectionType.TESTIMONIALS,
+    content: {
+      items: [{ quote: 'God is good.', name: 'Jane' }],
+      acceptSubmissions: true,
+    },
+  };
+
+  describe('submitTestimonial', () => {
+    it('creates a PENDING submission for a section that accepts them', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          isPublished: true,
+          sections: [testimonialsSection],
+        }),
+      );
+      await service.submitTestimonial('higher-ground-2026', {
+        sectionId: 'sec-testimonials',
+        quote: 'It changed my life.',
+        name: 'Sam',
+      });
+      expect(mockTestimonialSubmissionRepo.save).toHaveBeenCalled();
+      expect(mockTestimonialSubmissionRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sectionId: 'sec-testimonials',
+          quote: 'It changed my life.',
+          name: 'Sam',
+        }),
+      );
+    });
+
+    it('rejects when the section does not exist on the page', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          isPublished: true,
+          sections: [testimonialsSection],
+        }),
+      );
+      await expect(
+        service.submitTestimonial('higher-ground-2026', {
+          sectionId: 'no-such-section',
+          quote: 'It changed my life.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockTestimonialSubmissionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the section has not opted into acceptSubmissions', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          isPublished: true,
+          sections: [
+            {
+              id: 'sec-testimonials',
+              type: PageSectionType.TESTIMONIALS,
+              content: { items: [] },
+            },
+          ],
+        }),
+      );
+      await expect(
+        service.submitTestimonial('higher-ground-2026', {
+          sectionId: 'sec-testimonials',
+          quote: 'It changed my life.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('404s for an unpublished or unknown slug', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.submitTestimonial('missing', {
+          sectionId: 'sec-testimonials',
+          quote: 'It changed my life.',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('listTestimonialSubmissions / moderateTestimonialSubmission', () => {
+    it('lists submissions for a page, optionally filtered by status', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(makeExistingPage());
+      mockTestimonialSubmissionRepo.find.mockResolvedValue([
+        { id: 'sub-1', status: TestimonialSubmissionStatus.PENDING },
+      ]);
+      const result = await service.listTestimonialSubmissions(
+        'page-1',
+        TestimonialSubmissionStatus.PENDING,
+      );
+      expect(mockTestimonialSubmissionRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            page: { id: 'page-1' },
+            status: TestimonialSubmissionStatus.PENDING,
+          },
+        }),
+      );
+      expect(result).toEqual([
+        { id: 'sub-1', status: TestimonialSubmissionStatus.PENDING },
+      ]);
+    });
+
+    it('moderates a submission by flipping its status', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(makeExistingPage());
+      mockTestimonialSubmissionRepo.findOneBy.mockResolvedValue({
+        id: 'sub-1',
+        status: TestimonialSubmissionStatus.PENDING,
+      });
+      await service.moderateTestimonialSubmission('page-1', 'sub-1', {
+        status: TestimonialSubmissionStatus.APPROVED,
+      });
+      expect(mockTestimonialSubmissionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'sub-1',
+          status: TestimonialSubmissionStatus.APPROVED,
+        }),
+      );
+    });
+
+    it('404s when moderating a submission that does not exist', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(makeExistingPage());
+      mockTestimonialSubmissionRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.moderateTestimonialSubmission('page-1', 'missing-sub', {
+          status: TestimonialSubmissionStatus.APPROVED,
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('approved testimonial submissions merged into public output', () => {
+    it('getForPublic appends APPROVED submissions to a section that accepts them', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue({
+        id: 'page-1',
+        slug: 'higher-ground-2026',
+        title: 'Higher Ground 2026',
+        seoDescription: null,
+        ogImageUrl: null,
+        theme: 'minimal',
+        accentColor: null,
+        sections: [testimonialsSection],
+        isPublished: true,
+      });
+      mockTestimonialSubmissionRepo.find.mockResolvedValue([
+        { sectionId: 'sec-testimonials', quote: 'Amazing.', name: 'Sam' },
+      ]);
+      const result = await service.getForPublic('higher-ground-2026');
+      expect(mockTestimonialSubmissionRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: TestimonialSubmissionStatus.APPROVED,
+          }),
+        }),
+      );
+      expect(result.sections[0].content.items).toEqual([
+        { quote: 'God is good.', name: 'Jane' },
+        { quote: 'Amazing.', name: 'Sam' },
+      ]);
+    });
+
+    it('does not query submissions when no section accepts them', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue({
+        id: 'page-1',
+        slug: 'higher-ground-2026',
+        title: 'Higher Ground 2026',
+        seoDescription: null,
+        ogImageUrl: null,
+        theme: 'minimal',
+        accentColor: null,
+        sections: [heroSection],
+        isPublished: true,
+      });
+      await service.getForPublic('higher-ground-2026');
+      expect(mockTestimonialSubmissionRepo.find).not.toHaveBeenCalled();
     });
   });
 });

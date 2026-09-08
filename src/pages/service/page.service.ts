@@ -4,17 +4,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import 'multer';
-import { Page } from '../entity/page.entity';
+import { Page, PageSection } from '../entity/page.entity';
+import { TestimonialSubmission } from '../entity/testimonial-submission.entity';
 import { Form } from '../../forms/entity/form.entity';
 import {
   CreatePageDto,
+  ModerateTestimonialSubmissionDto,
   PageSectionDto,
+  PageTheme,
   PublicPageDto,
+  SubmitTestimonialDto,
   UpdatePageDto,
 } from '../dto/page.dto';
-import { PageSectionType } from '../enum/page.enum';
+import {
+  PageSectionType,
+  TestimonialSubmissionStatus,
+} from '../enum/page.enum';
 import { CloudinaryService } from '../../utility/service/cloudinary.service';
 
 @Injectable()
@@ -24,6 +31,8 @@ export class PageService {
     private readonly pageRepo: Repository<Page>,
     @InjectRepository(Form)
     private readonly formRepo: Repository<Form>,
+    @InjectRepository(TestimonialSubmission)
+    private readonly testimonialSubmissionRepo: Repository<TestimonialSubmission>,
     private readonly cloudinaryService: CloudinaryService,
   ) {}
 
@@ -39,9 +48,13 @@ export class PageService {
       title: dto.title,
       seoDescription: dto.seoDescription ?? null,
       isPublished: dto.isPublished ?? false,
+      theme: dto.theme ?? 'minimal',
+      accentColor: dto.accentColor ?? null,
       sections: dto.sections,
       draftTitle: dto.title,
       draftSeoDescription: dto.seoDescription ?? null,
+      draftTheme: dto.theme ?? 'minimal',
+      draftAccentColor: dto.accentColor ?? null,
       draftSections: dto.sections,
     });
     return this.pageRepo.save(page);
@@ -71,7 +84,9 @@ export class PageService {
       title: page.title,
       seoDescription: page.seoDescription,
       ogImageUrl: page.ogImageUrl,
-      sections: page.sections,
+      theme: page.theme as PageTheme,
+      accentColor: page.accentColor,
+      sections: await this.withApprovedTestimonials(page, page.sections),
     };
   }
 
@@ -93,8 +108,53 @@ export class PageService {
       title: page.draftTitle,
       seoDescription: page.draftSeoDescription,
       ogImageUrl: page.draftOgImageUrl,
-      sections: page.draftSections,
+      theme: page.draftTheme as PageTheme,
+      accentColor: page.draftAccentColor,
+      sections: await this.withApprovedTestimonials(page, page.draftSections),
     };
+  }
+
+  // A TESTIMONIALS section with content.acceptSubmissions === true also
+  // shows visitor-submitted testimonies once an admin approves them —
+  // merged in here, server-side, so discuva-member's rendering never needs
+  // a second fetch: it just sees a possibly-longer `items` array. Submitted
+  // items carry no photoUrl (public submission never accepts an image
+  // upload — see SubmitTestimonialDto's own comment).
+  private async withApprovedTestimonials(
+    page: Page,
+    sections: PageSection[],
+  ): Promise<PageSection[]> {
+    const testimonialSectionIds = sections
+      .filter(
+        (s) =>
+          s.type === PageSectionType.TESTIMONIALS &&
+          s.content?.acceptSubmissions === true,
+      )
+      .map((s) => s.id);
+    if (testimonialSectionIds.length === 0) return sections;
+
+    const approved = await this.testimonialSubmissionRepo.find({
+      where: {
+        page: { id: page.id },
+        sectionId: In(testimonialSectionIds),
+        status: TestimonialSubmissionStatus.APPROVED,
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    return sections.map((s) => {
+      if (!testimonialSectionIds.includes(s.id)) return s;
+      const existingItems = Array.isArray(s.content.items)
+        ? s.content.items
+        : [];
+      const submittedItems = approved
+        .filter((sub) => sub.sectionId === s.id)
+        .map((sub) => ({ quote: sub.quote, name: sub.name ?? undefined }));
+      return {
+        ...s,
+        content: { ...s.content, items: [...existingItems, ...submittedItems] },
+      };
+    });
   }
 
   // Feeds discuva-member's sitemap/robots/llms.txt routes — every published
@@ -140,6 +200,8 @@ export class PageService {
       page.draftSeoDescription = dto.seoDescription;
     }
     if (dto.isPublished !== undefined) page.isPublished = dto.isPublished;
+    if (dto.theme !== undefined) page.draftTheme = dto.theme;
+    if (dto.accentColor !== undefined) page.draftAccentColor = dto.accentColor;
     if (dto.sections !== undefined) {
       await this.assertValidSections(dto.sections);
       page.draftSections = dto.sections;
@@ -163,6 +225,8 @@ export class PageService {
     page.seoDescription = page.draftSeoDescription;
     page.ogImageUrl = page.draftOgImageUrl;
     page.ogImagePublicId = page.draftOgImagePublicId;
+    page.theme = page.draftTheme;
+    page.accentColor = page.draftAccentColor;
     page.sections = page.draftSections;
     page.isPublished = true;
 
@@ -214,6 +278,18 @@ export class PageService {
           this.requireString(section.content, 'heading', label);
           this.requireString(section.content, 'body', label);
           this.optionalString(section.content, 'imageUrl', label);
+          this.optionalEnum(
+            section.content,
+            'layout',
+            ['stacked', 'split'],
+            label,
+          );
+          this.optionalEnum(
+            section.content,
+            'imagePosition',
+            ['left', 'right'],
+            label,
+          );
           break;
         case PageSectionType.STATS:
           this.requireArray(section.content, 'items', label, (item, i) => {
@@ -273,6 +349,11 @@ export class PageService {
             this.requireString(item, 'answer', itemLabel);
           });
           break;
+        case PageSectionType.MERCH:
+          this.requireString(section.content, 'imageUrl', label);
+          this.optionalString(section.content, 'heading', label);
+          this.assertPaired(section.content, 'linkLabel', 'linkUrl', label);
+          break;
       }
     }
   }
@@ -297,6 +378,21 @@ export class PageService {
     const value = content[key];
     if (value !== undefined && value !== null && typeof value !== 'string') {
       throw new BadRequestException(`${label}: "${key}" must be a string`);
+    }
+  }
+
+  private optionalEnum(
+    content: Record<string, unknown>,
+    key: string,
+    allowed: readonly string[],
+    label: string,
+  ): void {
+    const value = content[key];
+    if (value === undefined || value === null) return;
+    if (typeof value !== 'string' || !allowed.includes(value)) {
+      throw new BadRequestException(
+        `${label}: "${key}" must be one of ${allowed.join(', ')}`,
+      );
     }
   }
 
@@ -403,5 +499,65 @@ export class PageService {
       file.mimetype,
     );
     return { url: uploaded.secureUrl, publicId: uploaded.publicId };
+  }
+
+  // Public, unauthenticated — a visitor submitting their own testimony on a
+  // live page. Rejects unless the referenced section actually exists on
+  // this exact page, is a TESTIMONIALS section, and has opted in via
+  // content.acceptSubmissions, so a stale/guessed sectionId can't attach a
+  // submission to a section that was never configured to accept one.
+  // Always lands as PENDING — see withApprovedTestimonials for how an
+  // APPROVED row later surfaces on the public page.
+  async submitTestimonial(
+    slug: string,
+    dto: SubmitTestimonialDto,
+  ): Promise<void> {
+    const page = await this.pageRepo.findOneBy({ slug, isPublished: true });
+    if (!page) throw new NotFoundException('Page not found');
+
+    const section = page.sections.find((s) => s.id === dto.sectionId);
+    if (
+      !section ||
+      section.type !== PageSectionType.TESTIMONIALS ||
+      section.content?.acceptSubmissions !== true
+    ) {
+      throw new BadRequestException(
+        'This page is not accepting testimonial submissions',
+      );
+    }
+
+    const submission = this.testimonialSubmissionRepo.create({
+      page,
+      sectionId: dto.sectionId,
+      quote: dto.quote,
+      name: dto.name ?? null,
+    });
+    await this.testimonialSubmissionRepo.save(submission);
+  }
+
+  async listTestimonialSubmissions(
+    pageId: string,
+    status?: TestimonialSubmissionStatus,
+  ): Promise<TestimonialSubmission[]> {
+    await this.getById(pageId);
+    return this.testimonialSubmissionRepo.find({
+      where: { page: { id: pageId }, ...(status ? { status } : {}) },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async moderateTestimonialSubmission(
+    pageId: string,
+    submissionId: string,
+    dto: ModerateTestimonialSubmissionDto,
+  ): Promise<TestimonialSubmission> {
+    await this.getById(pageId);
+    const submission = await this.testimonialSubmissionRepo.findOneBy({
+      id: submissionId,
+      page: { id: pageId },
+    });
+    if (!submission) throw new NotFoundException('Submission not found');
+    submission.status = dto.status;
+    return this.testimonialSubmissionRepo.save(submission);
   }
 }
