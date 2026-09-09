@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { TenantTypeOrmModule } from '../tenant/utility/tenant-typeorm.module';
 import { Page } from './entity/page.entity';
 import { TestimonialSubmission } from './entity/testimonial-submission.entity';
 import { Form } from '../forms/entity/form.entity';
+import { Tenant } from '../tenant/entity/tenant.entity';
 import { PageService } from './service/page.service';
 import { PageAdminController } from './controller/page-admin.controller';
 import { PagePublicController } from './controller/page-public.controller';
@@ -15,6 +17,12 @@ import { AdminModule } from '../admin/admin.module';
     // PageService can look up a REGISTRATION section's formId — no other
     // Forms provider is needed.
     TenantTypeOrmModule.forFeature([Page, Form, TestimonialSubmission]),
+    // Tenant is a public-schema, control-plane entity (see UtilityModule's
+    // own comment on this) — plain TypeOrmModule.forFeature, not
+    // TenantTypeOrmModule. PageService.resolveChurchInfo reads it to back
+    // the FOOTER section/automatic footer's church name/address/support
+    // email.
+    TypeOrmModule.forFeature([Tenant]),
     UtilityModule,
     AdminModule,
   ],

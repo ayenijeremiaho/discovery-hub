@@ -10579,7 +10579,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground Conference 2026\",\n  \"seoDescription\": \"Three days of worship and teaching \\u2014 August 28-30, 2026.\",\n  \"isPublished\": false,\n  \"theme\": \"bold\",\n  \"accentColor\": \"#f97316\",\n  \"sections\": [\n    {\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"type\": \"HERO\",\n      \"content\": {\n        \"title\": \"Higher Ground 2026\",\n        \"subtitle\": \"Get empowered to be transformed.\",\n        \"dateRangeText\": \"August 28-30, 2026\",\n        \"ctaLabel\": \"Register Now\",\n        \"ctaUrl\": \"#register\"\n      }\n    },\n    {\n      \"id\": \"44444444-4444-4444-8444-444444444444\",\n      \"type\": \"SPEAKERS\",\n      \"content\": {\n        \"heading\": \"Ministering\",\n        \"items\": [\n          {\n            \"name\": \"Pastor Jane Doe\",\n            \"title\": \"Host & Senior Pastor\",\n            \"isHost\": true\n          },\n          {\n            \"name\": \"Apostle John Smith\",\n            \"title\": \"Guest Speaker\"\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"55555555-5555-4555-8555-555555555555\",\n      \"type\": \"MERCH\",\n      \"content\": {\n        \"heading\": \"Merch\",\n        \"imageUrl\": \"https://res.cloudinary.com/example/merch-flyer.png\",\n        \"linkLabel\": \"Pre-order Now\",\n        \"linkUrl\": \"https://shop.example.com\"\n      }\n    },\n    {\n      \"id\": \"22222222-2222-4222-8222-222222222222\",\n      \"type\": \"REGISTRATION\",\n      \"content\": {\n        \"heading\": \"Reserve Your Seat\",\n        \"formId\": \"{{formId}}\",\n        \"ctaLabel\": \"Register\"\n      }\n    },\n    {\n      \"id\": \"66666666-6666-4666-8666-666666666666\",\n      \"type\": \"TESTIMONIALS\",\n      \"content\": {\n        \"heading\": \"What Are You Believing For?\",\n        \"acceptSubmissions\": true,\n        \"items\": [\n          {\n            \"quote\": \"This conference changed my life.\",\n            \"name\": \"A previous attendee\"\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"33333333-3333-4333-8333-333333333333\",\n      \"type\": \"FAQ\",\n      \"content\": {\n        \"items\": [\n          {\n            \"question\": \"Is parking available?\",\n            \"answer\": \"Yes, free parking on-site.\"\n          }\n        ]\n      }\n    }\n  ]\n}",
+              "raw": "{\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground Conference 2026\",\n  \"seoDescription\": \"Three days of worship and teaching \\u2014 August 28-30, 2026.\",\n  \"isPublished\": false,\n  \"theme\": \"bold\",\n  \"accentColor\": \"#f97316\",\n  \"backgroundColor\": \"#1a1030\",\n  \"fontFamily\": \"poppins\",\n  \"sections\": [\n    {\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"type\": \"HERO\",\n      \"content\": {\n        \"title\": \"Higher Ground 2026\",\n        \"subtitle\": \"Get empowered to be transformed.\",\n        \"dateRangeText\": \"August 28-30, 2026\",\n        \"ctaLabel\": \"Register Now\",\n        \"ctaUrl\": \"#register\"\n      },\n      \"style\": {\n        \"size\": \"md\"\n      }\n    },\n    {\n      \"id\": \"44444444-4444-4444-8444-444444444444\",\n      \"type\": \"SPEAKERS\",\n      \"content\": {\n        \"heading\": \"Ministering\",\n        \"items\": [\n          {\n            \"name\": \"Pastor Jane Doe\",\n            \"title\": \"Host & Senior Pastor\",\n            \"isHost\": true\n          },\n          {\n            \"name\": \"Apostle John Smith\",\n            \"title\": \"Guest Speaker\"\n          }\n        ]\n      }\n    },\n    {\n      \"id\": \"55555555-5555-4555-8555-555555555555\",\n      \"type\": \"MERCH\",\n      \"content\": {\n        \"heading\": \"Merch\",\n        \"imageUrl\": \"https://res.cloudinary.com/example/merch-flyer.png\",\n        \"linkLabel\": \"Pre-order Now\",\n        \"linkUrl\": \"https://shop.example.com\"\n      },\n      \"style\": {\n        \"align\": \"center\",\n        \"size\": \"md\",\n        \"accentColor\": \"#f97316\"\n      }\n    },\n    {\n      \"id\": \"22222222-2222-4222-8222-222222222222\",\n      \"type\": \"REGISTRATION\",\n      \"content\": {\n        \"heading\": \"Reserve Your Seat\",\n        \"formId\": \"{{formId}}\",\n        \"ctaLabel\": \"Register\",\n        \"hideFormMeta\": true\n      },\n      \"style\": {\n        \"layout\": \"split\",\n        \"align\": \"right\",\n        \"spacing\": \"sm\",\n        \"size\": \"md\"\n      }\n    },\n    {\n      \"id\": \"66666666-6666-4666-8666-666666666666\",\n      \"type\": \"TESTIMONIALS\",\n      \"content\": {\n        \"heading\": \"What Are You Believing For?\",\n        \"acceptSubmissions\": true,\n        \"items\": [\n          {\n            \"quote\": \"This conference changed my life.\",\n            \"name\": \"A previous attendee\"\n          }\n        ]\n      },\n      \"style\": {\n        \"size\": \"md\"\n      }\n    },\n    {\n      \"id\": \"33333333-3333-4333-8333-333333333333\",\n      \"type\": \"FAQ\",\n      \"content\": {\n        \"items\": [\n          {\n            \"question\": \"Is parking available?\",\n            \"answer\": \"Yes, free parking on-site.\"\n          }\n        ]\n      },\n      \"hidden\": true,\n      \"style\": {\n        \"size\": \"lg\"\n      }\n    },\n    {\n      \"id\": \"77777777-7777-4777-8777-777777777777\",\n      \"type\": \"COUNTDOWN\",\n      \"content\": {\n        \"heading\": \"Countdown to YFC 2026\",\n        \"targetDate\": \"2026-11-27T09:00:00.000Z\",\n        \"expiredMessage\": \"We're live!\"\n      },\n      \"style\": {\n        \"align\": \"center\",\n        \"columns\": 2,\n        \"size\": \"lg\",\n        \"spacing\": \"lg\"\n      }\n    },\n    {\n      \"id\": \"88888888-8888-4888-8888-888888888888\",\n      \"type\": \"FOOTER\",\n      \"content\": {\n        \"text\": \"Thanks for being part of this.\",\n        \"links\": [\n          {\n            \"label\": \"Privacy Policy\",\n            \"url\": \"https://example.com/privacy\"\n          }\n        ],\n        \"socialLinks\": [\n          {\n            \"platform\": \"instagram\",\n            \"url\": \"https://instagram.com/example\"\n          }\n        ],\n        \"showContactInfo\": true\n      }\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -10667,7 +10667,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"theme\": \"bold\",\n  \"accentColor\": \"#f97316\"\n}",
+              "raw": "{\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"theme\": \"bold\",\n  \"accentColor\": \"#f97316\",\n  \"backgroundColor\": \"#1a1030\",\n  \"fontFamily\": \"poppins\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -10683,7 +10683,7 @@
               "body": "{\n  \"id\": \"{{pageId}}\",\n  \"title\": \"Higher Ground 2026\",\n  \"draftTitle\": \"Higher Ground 2026 (Updated)\"\n}"
             }
           ],
-          "description": "title/seoDescription/theme/accentColor/sections write to their draft* counterparts only \u2014 an already-published page can be edited without changing what a visitor sees. slug and isPublished still write live immediately. Use POST /pages/:id/publish to push draft content live."
+          "description": "title/seoDescription/theme/accentColor/backgroundColor/sections write to their draft* counterparts only \u2014 an already-published page can be edited without changing what a visitor sees. slug and isPublished still write live immediately. Use POST /pages/:id/publish to push draft content live."
         },
         {
           "name": "Publish Page (Admin)",
@@ -10711,6 +10711,45 @@
             }
           ],
           "description": "Copies every draft* field (draftTitle, draftSeoDescription, draftOgImageUrl/draftOgImagePublicId, draftSections) onto its live counterpart and sets isPublished = true. The only thing that ever moves draft content onto the live page."
+        },
+        {
+          "name": "Duplicate Page (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug\": \"higher-ground-2026-copy\",\n  \"title\": \"Higher Ground 2026 (Copy)\"\n}",
+              "options": {
+                "language": "json"
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/pages/{{pageId}}/duplicate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pages",
+                "{{pageId}}",
+                "duplicate"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"slug\": \"higher-ground-2026-copy\",\n  \"title\": \"Higher Ground 2026 (Copy)\",\n  \"isPublished\": false,\n  \"draftTitle\": \"Higher Ground 2026 (Copy)\"\n}"
+            }
+          ],
+          "description": "Copies the source page's current draft (title, sections/style, theme/colors/font) into a brand-new page under the given slug. title falls back to \"<source title> (Copy)\" when omitted. Always starts unpublished, regardless of whether the source page is live. Neither the OG image nor the previewToken is carried over \u2014 each page gets its own."
         },
         {
           "name": "List Testimonial Submissions (Admin)",
@@ -10920,7 +10959,7 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground Conference 2026\",\n  \"sections\": [\n    {\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"type\": \"HERO\",\n      \"content\": {\n        \"title\": \"Higher Ground 2026\"\n      }\n    }\n  ]\n}"
+              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground Conference 2026\",\n  \"sections\": [\n    {\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"type\": \"HERO\",\n      \"content\": {\n        \"title\": \"Higher Ground 2026\"\n      }\n    },\n    {\n      \"id\": \"88888888-8888-4888-8888-888888888888\",\n      \"type\": \"FOOTER\",\n      \"content\": {\n        \"text\": \"Thanks for being part of this.\",\n        \"links\": [\n          {\n            \"label\": \"Privacy Policy\",\n            \"url\": \"https://example.com/privacy\"\n          }\n        ],\n        \"socialLinks\": [\n          {\n            \"platform\": \"instagram\",\n            \"url\": \"https://instagram.com/example\"\n          }\n        ],\n        \"showContactInfo\": true\n      }\n    }\n  ],\n  \"church\": {\n    \"name\": \"Grace Chapel\",\n    \"address\": \"123 Main St, Springfield\",\n    \"supportEmail\": \"hello@gracechapel.example\"\n  }\n}"
             },
             {
               "name": "404 not published",
@@ -10960,7 +10999,7 @@
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"sections\": []\n}"
+              "body": "{\n  \"id\": \"{{pageId}}\",\n  \"slug\": \"higher-ground-2026\",\n  \"title\": \"Higher Ground 2026 (Updated)\",\n  \"sections\": [],\n  \"church\": {\n    \"name\": \"Grace Chapel\",\n    \"address\": \"123 Main St, Springfield\",\n    \"supportEmail\": \"hello@gracechapel.example\"\n  }\n}"
             },
             {
               "name": "404 wrong or missing token",

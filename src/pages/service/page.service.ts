@@ -5,12 +5,18 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { ClsService } from 'nestjs-cls';
 import 'multer';
 import { Page, PageSection } from '../entity/page.entity';
 import { TestimonialSubmission } from '../entity/testimonial-submission.entity';
 import { Form } from '../../forms/entity/form.entity';
+import { Tenant } from '../../tenant/entity/tenant.entity';
+import { AppClsStore } from '../../tenant/interface/tenant-cls-store.interface';
 import {
   CreatePageDto,
+  DuplicatePageDto,
+  FOOTER_SOCIAL_PLATFORMS,
   ModerateTestimonialSubmissionDto,
   PageSectionDto,
   PageTheme,
@@ -23,9 +29,12 @@ import {
   TestimonialSubmissionStatus,
 } from '../enum/page.enum';
 import { CloudinaryService } from '../../utility/service/cloudinary.service';
+import { CacheService } from '../../utility/service/cache.service';
 
 @Injectable()
 export class PageService {
+  private readonly cacheTtl: number;
+
   constructor(
     @InjectRepository(Page)
     private readonly pageRepo: Repository<Page>,
@@ -33,8 +42,18 @@ export class PageService {
     private readonly formRepo: Repository<Form>,
     @InjectRepository(TestimonialSubmission)
     private readonly testimonialSubmissionRepo: Repository<TestimonialSubmission>,
+    @InjectRepository(Tenant)
+    private readonly tenantRepo: Repository<Tenant>,
     private readonly cloudinaryService: CloudinaryService,
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly cls: ClsService<AppClsStore>,
+    private readonly cacheService: CacheService,
+  ) {
+    this.cacheTtl = this.configService.get<number>(
+      'CACHE_TTL_REFERENCE_SECONDS',
+      300,
+    );
+  }
 
   async create(dto: CreatePageDto): Promise<Page> {
     await this.assertSlugAvailable(dto.slug);
@@ -50,12 +69,64 @@ export class PageService {
       isPublished: dto.isPublished ?? false,
       theme: dto.theme ?? 'minimal',
       accentColor: dto.accentColor ?? null,
+      backgroundColor: dto.backgroundColor ?? null,
+      fontFamily: dto.fontFamily ?? null,
       sections: dto.sections,
       draftTitle: dto.title,
       draftSeoDescription: dto.seoDescription ?? null,
       draftTheme: dto.theme ?? 'minimal',
       draftAccentColor: dto.accentColor ?? null,
+      draftBackgroundColor: dto.backgroundColor ?? null,
+      draftFontFamily: dto.fontFamily ?? null,
       draftSections: dto.sections,
+    });
+    return this.pageRepo.save(page);
+  }
+
+  // Starts a brand-new page from an existing one's current DRAFT (not
+  // live) — the most up-to-date working version, same reasoning `openEdit`
+  // on the discuva-admin side always continues from draft*, not live.
+  // Always unpublished regardless of the source's own isPublished state: a
+  // duplicate under a fresh, unreviewed slug must never go live silently
+  // just because the page it was copied from happened to be live. Neither
+  // OG image is carried over — sharing one Cloudinary asset's public_id
+  // across two Page rows would make either page's own image-replace/remove
+  // flow able to delete an asset the other still points at; simplest safe
+  // answer is the duplicate starts with no OG image, same "no orphan-
+  // cleanup, accepted simplicity" tradeoff already made elsewhere in this
+  // service. previewToken is not copied either — the DB default on the new
+  // row generates a fresh one, since every page needs its own private
+  // preview link.
+  async duplicate(id: string, dto: DuplicatePageDto): Promise<Page> {
+    const source = await this.getById(id);
+    await this.assertSlugAvailable(dto.slug);
+
+    // Deep-cloned, not shared by reference — from this point these are two
+    // genuinely independent pages; neither's later edits may bleed into
+    // the other through a shared nested content/style object.
+    const sections = JSON.parse(
+      JSON.stringify(source.draftSections),
+    ) as PageSection[];
+    await this.assertValidSections(sections);
+
+    const title = dto.title ?? `${source.draftTitle} (Copy)`;
+    const page = this.pageRepo.create({
+      slug: dto.slug,
+      title,
+      seoDescription: source.draftSeoDescription,
+      isPublished: false,
+      theme: source.draftTheme,
+      accentColor: source.draftAccentColor,
+      backgroundColor: source.draftBackgroundColor,
+      fontFamily: source.draftFontFamily,
+      sections,
+      draftTitle: title,
+      draftSeoDescription: source.draftSeoDescription,
+      draftTheme: source.draftTheme,
+      draftAccentColor: source.draftAccentColor,
+      draftBackgroundColor: source.draftBackgroundColor,
+      draftFontFamily: source.draftFontFamily,
+      draftSections: sections,
     });
     return this.pageRepo.save(page);
   }
@@ -73,8 +144,10 @@ export class PageService {
   // Only a published page is ever reachable here — an unpublished draft
   // 404s the same as a slug that doesn't exist at all, so a visitor can
   // never distinguish "never existed" from "not live yet". Unlike Forms'
-  // PublicFormDto, nothing is stripped from `sections` (see PublicPageDto's
-  // own comment).
+  // PublicFormDto, nothing is stripped from an individual section's
+  // `content` (see PublicPageDto's own comment) — the one exception is a
+  // whole section with `hidden: true`, filtered out below, same as it never
+  // existed in the array at all.
   async getForPublic(slug: string): Promise<PublicPageDto> {
     const page = await this.pageRepo.findOneBy({ slug, isPublished: true });
     if (!page) throw new NotFoundException('Page not found');
@@ -86,17 +159,25 @@ export class PageService {
       ogImageUrl: page.ogImageUrl,
       theme: page.theme as PageTheme,
       accentColor: page.accentColor,
-      sections: await this.withApprovedTestimonials(page, page.sections),
+      backgroundColor: page.backgroundColor,
+      fontFamily: page.fontFamily,
+      church: await this.resolveChurchInfo(),
+      sections: this.withoutHiddenSections(
+        await this.withApprovedTestimonials(page, page.sections),
+      ),
     };
   }
 
   // The shareable "Preview" link's target — same PublicPageDto shape as
   // getForPublic, sourced from draft* instead, so an admin sees exactly
-  // what a visitor will see once they publish. No isPublished check: a
-  // page that's never been published at all is still previewable. The
-  // token is the only gate — anyone without it gets the same 404 a
-  // nonexistent slug would, same "don't reveal which reason" posture
-  // getForPublic already takes for unpublished vs. nonexistent.
+  // what a visitor will see once they publish — hidden sections are
+  // filtered out here too, for exactly that reason: a "preview" that showed
+  // sections publishing would actually hide wouldn't be previewing the real
+  // outcome. No isPublished check: a page that's never been published at
+  // all is still previewable. The token is the only gate — anyone without
+  // it gets the same 404 a nonexistent slug would, same "don't reveal which
+  // reason" posture getForPublic already takes for unpublished vs.
+  // nonexistent.
   async getForPreview(slug: string, token: string): Promise<PublicPageDto> {
     const page = await this.pageRepo.findOneBy({ slug });
     if (!page || !token || page.previewToken !== token) {
@@ -110,8 +191,46 @@ export class PageService {
       ogImageUrl: page.draftOgImageUrl,
       theme: page.draftTheme as PageTheme,
       accentColor: page.draftAccentColor,
-      sections: await this.withApprovedTestimonials(page, page.draftSections),
+      backgroundColor: page.draftBackgroundColor,
+      fontFamily: page.draftFontFamily,
+      church: await this.resolveChurchInfo(),
+      sections: this.withoutHiddenSections(
+        await this.withApprovedTestimonials(page, page.draftSections),
+      ),
     };
+  }
+
+  // Backs both PublicPageDto.church: the automatic minimal footer shown
+  // when a page has no FOOTER section at all (name + copyright line), and
+  // a FOOTER section's own optional "show contact info" toggle (address +
+  // support email). Shares the same `tenant-branding:${tenantId}` cache
+  // entry EmailQueueService/PdfService/TenantCurrencyService already
+  // populate (see TenantCurrencyService's own comment) — this is very
+  // likely a cache hit, not a fresh query, for any tenant with an active
+  // Page. No tenant CLS context (shouldn't happen for a real request here,
+  // but mirrors TenantCurrencyService's own defensive fallback) falls back
+  // to the CHURCH_NAME env default with no address/email.
+  private async resolveChurchInfo(): Promise<PublicPageDto['church']> {
+    const tenantId = this.cls.get('tenantId');
+    const tenant = tenantId
+      ? await this.cacheService.getOrSet(
+          `tenant-branding:${tenantId}`,
+          () => this.tenantRepo.findOneBy({ id: tenantId }),
+          this.cacheTtl,
+        )
+      : null;
+    return {
+      name: tenant?.name ?? this.configService.get<string>('CHURCH_NAME'),
+      address: tenant?.address ?? null,
+      supportEmail: tenant?.supportEmail ?? null,
+    };
+  }
+
+  // See getForPublic/getForPreview's own comments — a hidden section stays
+  // saved (content, style, position) but never reaches either the public
+  // route or its own preview, same as if it weren't in the array at all.
+  private withoutHiddenSections(sections: PageSection[]): PageSection[] {
+    return sections.filter((s) => !s.hidden);
   }
 
   // A TESTIMONIALS section with content.acceptSubmissions === true also
@@ -202,6 +321,10 @@ export class PageService {
     if (dto.isPublished !== undefined) page.isPublished = dto.isPublished;
     if (dto.theme !== undefined) page.draftTheme = dto.theme;
     if (dto.accentColor !== undefined) page.draftAccentColor = dto.accentColor;
+    if (dto.backgroundColor !== undefined) {
+      page.draftBackgroundColor = dto.backgroundColor;
+    }
+    if (dto.fontFamily !== undefined) page.draftFontFamily = dto.fontFamily;
     if (dto.sections !== undefined) {
       await this.assertValidSections(dto.sections);
       page.draftSections = dto.sections;
@@ -227,6 +350,8 @@ export class PageService {
     page.ogImagePublicId = page.draftOgImagePublicId;
     page.theme = page.draftTheme;
     page.accentColor = page.draftAccentColor;
+    page.backgroundColor = page.draftBackgroundColor;
+    page.fontFamily = page.draftFontFamily;
     page.sections = page.draftSections;
     page.isPublished = true;
 
@@ -312,6 +437,8 @@ export class PageService {
           this.requireArray(section.content, 'days', label, (day, i) => {
             const dayLabel = `${label}, day #${i + 1}`;
             this.requireString(day, 'label', dayLabel);
+            this.optionalString(day, 'date', dayLabel);
+            this.optionalString(day, 'venue', dayLabel);
             this.requireArray(day, 'entries', dayLabel, (entry, j) => {
               const entryLabel = `${dayLabel}, entry #${j + 1}`;
               this.optionalString(entry, 'time', entryLabel);
@@ -353,6 +480,52 @@ export class PageService {
           this.requireString(section.content, 'imageUrl', label);
           this.optionalString(section.content, 'heading', label);
           this.assertPaired(section.content, 'linkLabel', 'linkUrl', label);
+          break;
+        case PageSectionType.COUNTDOWN: {
+          this.optionalString(section.content, 'heading', label);
+          this.optionalString(section.content, 'expiredMessage', label);
+          const targetDate = this.requireString(
+            section.content,
+            'targetDate',
+            label,
+          );
+          if (Number.isNaN(Date.parse(targetDate))) {
+            throw new BadRequestException(
+              `${label}: "targetDate" must be a valid date`,
+            );
+          }
+          break;
+        }
+        case PageSectionType.FOOTER:
+          this.optionalString(section.content, 'heading', label);
+          this.optionalString(section.content, 'text', label);
+          this.optionalBoolean(section.content, 'showCopyright', label);
+          this.optionalBoolean(section.content, 'showContactInfo', label);
+          this.optionalArray(section.content, 'links', label, (item, i) => {
+            const itemLabel = `${label}, link #${i + 1}`;
+            this.requireString(item, 'label', itemLabel);
+            this.requireString(item, 'url', itemLabel);
+          });
+          this.optionalArray(
+            section.content,
+            'socialLinks',
+            label,
+            (item, i) => {
+              const itemLabel = `${label}, social link #${i + 1}`;
+              const platform = item['platform'];
+              if (
+                typeof platform !== 'string' ||
+                !FOOTER_SOCIAL_PLATFORMS.includes(
+                  platform as (typeof FOOTER_SOCIAL_PLATFORMS)[number],
+                )
+              ) {
+                throw new BadRequestException(
+                  `${itemLabel}: "platform" must be one of ${FOOTER_SOCIAL_PLATFORMS.join(', ')}`,
+                );
+              }
+              this.requireString(item, 'url', itemLabel);
+            },
+          );
           break;
       }
     }
@@ -425,6 +598,41 @@ export class PageService {
       throw new BadRequestException(
         `${label}: "${key}" needs at least one entry`,
       );
+    }
+    value.forEach((item, index) => {
+      if (!item || typeof item !== 'object') {
+        throw new BadRequestException(
+          `${label}: "${key}" entry #${index + 1} is invalid`,
+        );
+      }
+      checkItem(item as Record<string, unknown>, index);
+    });
+  }
+
+  private optionalBoolean(
+    content: Record<string, unknown>,
+    key: string,
+    label: string,
+  ): void {
+    const value = content[key];
+    if (value !== undefined && value !== null && typeof value !== 'boolean') {
+      throw new BadRequestException(`${label}: "${key}" must be a boolean`);
+    }
+  }
+
+  // Same per-item validation as requireArray, but — unlike e.g. FAQ's
+  // items — the array itself is opt-in: FOOTER's links/socialLinks are
+  // extras a footer can have zero of.
+  private optionalArray(
+    content: Record<string, unknown>,
+    key: string,
+    label: string,
+    checkItem: (item: Record<string, unknown>, index: number) => void,
+  ): void {
+    const value = content[key];
+    if (value === undefined || value === null) return;
+    if (!Array.isArray(value)) {
+      throw new BadRequestException(`${label}: "${key}" must be an array`);
     }
     value.forEach((item, index) => {
       if (!item || typeof item !== 'object') {

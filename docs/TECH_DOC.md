@@ -4259,19 +4259,166 @@ the only gate: this is a bearer-link model (discuva-admin's "Preview" button bui
 `<liveUrl>?previewToken=<token>`), not an authenticated one — anyone holding the link can view the draft, same
 tradeoff a Figma/Google Docs "anyone with the link" share carries.
 
-**Page-level theme + accent color** (`AddPageThemeFields1796713200000`) — `theme` (`character varying`, default
-`'minimal'`) and `accentColor` (nullable hex string), each with a `draft*` counterpart following the exact same
-draft/publish routing as every other content field above: `PATCH` writes `draftTheme`/`draftAccentColor` only,
-`publish()` copies both onto the live columns. `theme` is a whole-*page* choice, not per-section — `'minimal'` is
-the original look (unchanged) and every page defaults to it; `'bold'` is a dark background with bold/uppercase
-headings, with `accentColor` picked out for emphasis (borders, badges, buttons, the active FAQ question, the
-Speakers "Host" badge) across every section type. Validated at the DTO layer only (`@IsIn(['minimal', 'bold'])`,
-`@IsHexColor()`), not in `assertValidSections` — it isn't per-section content. Rendering lives entirely in
-discuva-member's `SectionRenderer` (see that repo): each section function branches its own classes on `theme`,
-and a runtime `accentColor` is applied via inline `style={{ color / borderColor: accentColor }}`, never a
-Tailwind bracket class (Tailwind's JIT can't statically extract a class from a value only known at render time).
+**Page-level theme + accent/background color** (`AddPageThemeFields1796713200000`,
+`AddPageBackgroundColor1796886000000`) — `theme` (`character varying`, default `'minimal'`), `accentColor`, and
+`backgroundColor` (both nullable hex strings), each with a `draft*` counterpart following the exact same
+draft/publish routing as every other content field above: `PATCH` writes `draftTheme`/`draftAccentColor`/
+`draftBackgroundColor` only, `publish()` copies all three onto the live columns. `theme` is a whole-*page* choice,
+not per-section — `'minimal'` is the original look (unchanged) and every page defaults to it; `'bold'` is a
+church-*picked* background (not a fixed color — the original single hardcoded dark background was a real gap for
+a multi-tenant product, where every church has its own brand) with bold/uppercase headings. `backgroundColor`
+null falls back to the original default (`#150a08`, discuva-member's `bold-theme.ts` `DEFAULT_BOLD_BG`), and is
+only meaningful under `'bold'` — there's no analogous concept under `'minimal'`'s plain white background, so
+discuva-admin's editor keeps the `backgroundColor` picker gated behind `theme === 'bold'` and nulls it on save
+otherwise. `accentColor`, by contrast, applies under **either** theme — a `'minimal'` (light) page can pick a
+brand accent color too (used more sparingly there: stat numbers, the active FAQ question, buttons, the Speakers
+"Host" badge, Countdown digits — there's no dark background for it to stand out against the way it does under
+`'bold'`). This wasn't always true: `accentColor` used to be gated behind `theme === 'bold'` in both
+discuva-admin's editor (hidden picker, nulled on save) and discuva-member's renderer (`dark &&` guards in
+`section-renderer.tsx`/`faq-accordion.tsx`/`countdown-timer.tsx`) — a real gap for a multi-tenant product, since
+a church running the default light look had no way to apply its brand color anywhere. Both colors validated at
+the DTO layer only (`@IsIn(['minimal', 'bold'])`, `@IsHexColor()` ×2), not in `assertValidSections` — neither is
+per-section content.
 
-**Section toolkit (`PageSectionType`, 9 fixed types)** — `content`'s shape depends on `type`:
+Rendering lives entirely in discuva-member (`bold-theme.ts` + `SectionRenderer`): `resolveBoldPalette` computes a
+full set of CSS custom properties (`--bold-bg`, `--bold-fg`, `--bold-fg-NN` at several opacity steps,
+`--bold-border-NN`) from `backgroundColor` **once**, applied as an inline `style` on the page's outer wrapper
+(`app/p/[slug]/page.tsx`) — foreground text color is never stored, it's picked (white vs. near-black) from the
+background's YIQ luminance so whatever a church picks stays legible without them needing to reason about
+contrast themselves. Every section references these by name (`text-[var(--bold-fg-60)]`, `bg-[var(--bold-bg)]`)
+instead of hardcoding `text-white`/`text-white/60` — Tailwind compiles that class fine at build time (the class
+*string* never changes, only what the variable resolves to), which is what lets one church-picked color cascade
+into every section with no prop threading. `accentColor` remains a real runtime value applied via inline
+`style={{ color / borderColor: accentColor }}` (a literal `var()` string can't be used there since it's an
+admin-controlled hex, not a fixed CSS variable) — never a Tailwind bracket class, since Tailwind's JIT can't
+statically extract a class from a value only known at render time.
+
+**Page-level font (`AddPageFontFamily1796972400000`)** — `fontFamily`/`draftFontFamily` (nullable `character
+varying`), same draft/publish routing as `theme`/`accentColor`/`backgroundColor`: `PATCH` writes `draftFontFamily`
+only, `publish()` copies it onto the live column. Validated against a small curated list, `PAGE_FONTS = ['inter',
+'poppins', 'playfair', 'bebas-neue']` (`@IsIn`, not free text) — `next/font/google` needs a statically-imported
+specifier to self-host/preload a font, which rules out an arbitrary runtime string the way `accentColor`'s hex
+value works; a short fixed list sidesteps that entirely. Page-level only, not per-section, for the same reason a
+page-builder that let every block pick its own typeface would look amateurish rather than flexible. `null` keeps
+the exact `font-sans` look every page already had — a font only ever applies once a church explicitly picks one
+from discuva-admin's Font `<select>` (`app/pages/page.tsx`, next to Theme); there's deliberately no per-theme
+default that would silently change an already-published page's typography as a side effect of this feature
+shipping. Rendering (discuva-member's `components/pages/page-fonts.ts`) statically imports all 4 fonts via
+`next/font/google` and picks one's `.className` (not the CSS-variable `.variable` pattern `app/layout.tsx`'s own
+root fonts use — a page needs exactly one font applied to its whole subtree at a time, so there's no need for
+several fonts coexisting via CSS variables) onto the page's outer wrapper in `app/p/[slug]/page.tsx`, overriding
+the inherited body font via normal CSS specificity. Bebas Neue only ships at weight 400 on Google Fonts, so a
+section elsewhere requesting `font-bold` under it renders at that same weight (a browser fallback, not a bug).
+
+**Per-section style overrides (`SectionStyleDto`, `PageSectionDto.style`)** — each section in `sections`/
+`draftSections` may carry an optional `style: { align?, columns?, size?, accentColor?, spacing?, layout? }`
+sibling to `content`, validated as a real nested class (`@ValidateNested()` + `@Type(() => SectionStyleDto)`)
+rather than a bare `@IsObject()` the way `content` is — unlike `content`, whose shape depends on `type`, `style`'s
+shape is fixed regardless of section type, so a shared DTO validates it directly instead of going through
+`PageService.assertValidSections`'s per-type switch. `align` ∈ `['left', 'center', 'right']`, `columns` ∈
+`[1, 2, 3, 4]`, `size` ∈ `['sm', 'md', 'lg', 'xl']`, `accentColor` a hex string overriding the page-level one for
+just that section, `spacing` ∈ `['sm', 'md', 'lg']`, `layout` ∈ `['stacked', 'split']`. Validated **structurally
+only** — this DTO does not know or enforce which fields apply to which `PageSectionType`; that per-type
+applicability table is owned entirely by discuva-admin's `SECTION_STYLE_APPLICABILITY`
+(`app/pages/sections-editor.tsx`), kept in exactly one place to avoid two authorities drifting out of sync.
+`spacing` is the one field with no applicability gating at all — it applies to every section type. `layout` is
+REGISTRATION-only today:
+
+| Type | align | columns | size | accentColor |
+|---|---|---|---|---|
+| HERO | text block | — | subtitle body text | CTA button |
+| ABOUT | stacked layout only (meaningless once `layout: 'split'` already anchors text to one side) | — | body text (applies in both stacked and split — body copy exists in both) | — |
+| STATS | — | 1–4 | value text size | value color |
+| SPEAKERS | — | 1–4 | photo tile size (independent of `columns` — caps the tile's own footprint, not how many share a row) | host badge + regular-tile badge |
+| SCHEDULE | — | 1–4 | — (day cards are information-dense; a shrink knob risks overflow) | label/icons |
+| REGISTRATION | stacked: heading/body text + the white form card's own position. split: which side the form card sits on (see `layout` below) — either way the card's *contents* (`EmbeddedFormFill`) stay untouched | — | body text (both stacked and split) | — (the embedded form card is deliberately theme-independent; out of scope) |
+| TESTIMONIALS | — | 1–3 (not 4 — a quote card needs real width) | quote text | — |
+| FAQ | — | — | heading + question/answer text, scaled together as one choice | active question |
+| MERCH | image+CTA block (coupled with `size` — alignment is only visible once `size` caps the image narrower than the section) | — | image width cap | CTA button |
+| COUNTDOWN | row justify | 1–4 | digit size | digit color |
+| FOOTER | text block | — | footer text | links/social links |
+
+**`spacing` — vertical breathing room above/below a section, universal across every type** (added after real user
+feedback: "the space between the form and the stats counter is too much," and a request that it be
+*customizable*, not just globally reduced). Unlike the other 4 fields, this isn't per-type-gated at all —
+discuva-admin's `SectionStyleControls` renders the Spacing control unconditionally on every section card, and
+`SectionStyleControls` itself can no longer return `null` for that reason. `sm`/`md`/`lg` map to `py-8`/`py-16`/
+`py-24` (discuva-member's `spacingClass`, `components/pages/section-style.ts`) — `md` (`py-16`) is the exact flat
+value every section used before this knob existed, so an unset/omitted `spacing` renders byte-for-byte identical
+to every already-published page. `HeroSection` is the one exception — its vertical rhythm is driven by
+`aspect-video` (when it has a background image) or a responsive `py-6 sm:py-12 md:py-16` content overlay (when it
+doesn't), neither of which is a flat padding value a `spacing` knob could meaningfully replace, so Hero doesn't
+carry this knob.
+
+Needs `@ValidateNested()`/`@Type()` specifically because the global `ValidationPipe`'s `whitelist: true`
+(`main.ts`) would otherwise silently strip a plain object literal here before validation even runs;
+`forbidNonWhitelisted: true` means an unrecognized key *inside* `style` (e.g. a typo) 400s rather than being
+silently dropped. Stored as an opaque jsonb sibling to `content` on the entity side (`Page.sections`'s
+`PageSection.style`), requiring no migration of its own since sections already live in a `jsonb` array.
+
+**Rendering (discuva-member, `components/pages/section-style.ts` + `SectionRenderer`)** — a section's own
+`style.accentColor`, when set, wins over the page-level `accentColor` for just that section
+(`SectionRenderer`'s `effectiveAccentColor`). `columns` maps to a `columnBasisClass(columns, variant)` lookup —
+three separate literal-string tables (`compact` for Stats/Countdown, `roomy` for Schedule, `square` for Speakers'
+override path), each a Tailwind-JIT-safe literal string (never built via runtime interpolation, since Tailwind's
+JIT only scans literal strings present in source). Each entry pairs an unprefixed `min-w`/`max-w` hint (today's
+original, content-driven mobile wrapping, unchanged) with an `sm:` override that actually *forces* the requested
+column count from 640px up — `sm:min-w-0 sm:max-w-none` clear the mobile hint, `sm:grow-0 sm:shrink-0
+sm:basis-[calc(...)]` (or `sm:basis-full` for `columns: 1`) sets a fixed, non-growing width equal to exactly
+`1/columns` of the row (minus that row's own gap, split proportionally) — flexbox decides how many items share a
+line using this basis *before* grow/shrink is applied, which is what makes this a real guarantee rather than a
+hint. (A first version used only the unprefixed min-w/max-w hint and shipped looking correct in isolation, but
+real-browser screenshot verification caught that it doesn't actually cap items per row — e.g. a "columns: 2"
+Stats row rendered all 4 stats on one line at tablet/desktop width, because a min-width hint alone never stops
+extra items from sharing a line once the container is wide enough.) `size` always **replaces** whatever
+count-based auto-sizing a section already had (Stats' `statValueSizeClass`), never blends with it, via a
+responsive class pair per bucket (e.g. `xl` → `text-5xl sm:text-7xl`) — Countdown has no existing auto-sizing to
+preserve, so its `size` is a plain override. Speakers' `size` (tile footprint) and `columns` (row-sharing cap)
+are independent and combinable — a fixed-size tile still respects a columns cap on its wrapper, they aren't
+mutually exclusive. `align` maps to `text-left/center/right` (block sections) or `justify-start/center/end`
+(Countdown's row). Testimonials' `columns` (1–3) maps to a plain CSS Grid instead of flex-wrap — quote cards are
+block-shaped and don't have the "partial last row" centering concern the flex-wrap sections solve for.
+
+**Speakers' flex-wrap migration is opt-in, not a default-path change** — the existing `grid grid-cols-2
+sm:grid-cols-3 md:grid-cols-4` is an explicit named-breakpoint contract every Speakers section without a style
+override still relies on; flex-wrap's wrap point is driven by cumulative width math, not named breakpoints, and
+isn't guaranteed to reproduce the same 2/3/4 cadence. Rather than risk regressing every existing section, the
+grid stays byte-for-byte untouched whenever neither `columns` nor `size` is set; flex-wrap only activates once a
+page actually opts into an override — new behavior nobody currently depends on. Verified via real Playwright
+screenshots at 375px/768px/1280px against a live throwaway Docker stack (DB-backed, not simulated).
+
+**Hiding a section without deleting it (`PageSectionDto.hidden`)** — each section may carry an optional
+`hidden?: boolean` sibling to `content`/`style`, validated as a plain `@IsOptional() @IsBoolean()` (no per-type
+meaning, unlike `style`). A hidden section stays fully saved — content, style, its position in the list — but
+`PageService.getForPublic`/`getForPreview` both filter it out of the `sections` array they return
+(`withoutHiddenSections`, applied after `withApprovedTestimonials`), so discuva-member never receives it at all
+and needs no changes of its own to honor this. Filtering happens in **both** routes, not just the live one — a
+preview that showed a section publishing would actually hide wouldn't be previewing the real outcome. Distinct
+from removing the section outright (`sections.filter`ing it out of the array client-side): a church building out
+next month's section ahead of time, or temporarily pulling one down, keeps its content and doesn't need to
+rebuild it from scratch later. `PageAdminController`'s own `GET /pages/:id` (the builder's raw read) is
+unaffected — it returns every section, hidden or not, since the admin needs to see and un-hide them.
+discuva-admin's `SectionsEditor` renders an eye/eye-off toggle per section card (dimmed + a "Hidden" badge when
+on) — no separate confirm dialog, unlike removing a section.
+
+**Duplicating an existing page (`POST /pages/:id/duplicate`, `PageService.duplicate`)** — starts a brand-new page
+from an existing one's current **draft** (not live — the most up-to-date working version, same reasoning
+discuva-admin's `openEdit` always continues from `draft*`). Takes a required new `slug` (pages have no natural
+"copy" slug to auto-generate, and slugs must stay unique) and an optional `title` override, falling back to
+`"<source title> (Copy)"`. Always starts **unpublished**, regardless of the source page's own `isPublished` state
+— a duplicate under a fresh, unreviewed slug must never silently go live just because the page it was copied from
+happened to be. Sections are deep-cloned (`JSON.parse(JSON.stringify(...))`), not shared by reference — the two
+pages are genuinely independent from the moment of creation, and re-validated (`assertValidSections`) before
+saving, the same defensive check `publish()` already applies, in case something the draft references (e.g. a
+`REGISTRATION` section's `formId`) was deleted since the source was last saved. Neither OG image is carried
+over — sharing one Cloudinary asset's `public_id` across two `Page` rows would let either page's own
+image-replace/remove flow delete an asset the other still points at; the duplicate simply starts with no OG
+image, same "no orphan-cleanup, accepted simplicity" tradeoff already made elsewhere in this service.
+`previewToken` is not copied either — the DB default on the new row generates its own, since every page needs an
+independent, private preview link. discuva-admin surfaces this as a "Duplicate Page" button in the editor panel
+(prompts for the new slug, then opens the created page for editing) — see `handleDuplicate` in `app/pages/page.tsx`.
+
+**Section toolkit (`PageSectionType`, 11 fixed types)** — `content`'s shape depends on `type`:
 
 | Type | Content shape |
 |---|---|
@@ -4279,11 +4426,208 @@ Tailwind bracket class (Tailwind's JIT can't statically extract a class from a v
 | `ABOUT` | `heading, body, imageUrl?, layout? ('stacked' \| 'split'), imagePosition? ('left' \| 'right')`. `layout` defaults to `'stacked'` (image above centered text, unchanged); `'split'` is a two-column layout (text one side, image filling the other — falls back to `'stacked'` client-side if there's no image to split against). `imagePosition` only matters when `layout` is `'split'`, defaulting to `'right'` |
 | `STATS` | `items: { label, value }[]` (≥1) |
 | `SPEAKERS` | `heading?, items: { name, title?, photoUrl?, isHost? }[]` (≥1). At most one item should be `isHost: true` — rendered as a larger, featured card above the regular grid instead of inside it (not validated server-side, same "harmless if malformed" precedent `HERO`'s `hideOverlayText` sets: if more than one item claims it, only the first counts, the rest fall back into the grid) |
-| `SCHEDULE` | `heading?, days: { label, entries: { time?, title }[] }[]` (≥1 day, each with ≥1 entry) |
-| `REGISTRATION` | `heading?, body?, formId, ctaLabel?` — embeds an existing `Form` inline (rendered client-side via the same `FormFillFields`/`PaginatedFormFillFields` components a form's own public fill page already uses) rather than reimplementing registration. Reuses the whole Forms feature (validation, dedup, notifications, `postSubmitOutcomes`) for free. A page may carry more than one `REGISTRATION` section (e.g. event registration and a separate merch pre-order form) — nothing restricts it, each is independent with its own `heading`/`body`/`formId` |
+| `SCHEDULE` | `heading?, days: { label, date?, venue?, entries: { time?, title }[] }[]` (≥1 day, each with ≥1 entry). `venue` is per-*day*, not per-section — a multi-day programme can move locations day to day. Rendered as a bordered card grid (discuva-member's `ScheduleSection`), one card per day |
+| `REGISTRATION` | `heading?, body?, formId, ctaLabel?, hideFormMeta?` — embeds an existing `Form` inline (rendered client-side via the same `FormFillFields`/`PaginatedFormFillFields` components a form's own public fill page already uses) rather than reimplementing registration. Reuses the whole Forms feature (validation, dedup, notifications, `postSubmitOutcomes`) for free. `hideFormMeta` (default off) suppresses the linked form's own name/description inside the card — see the embedded-form-fill fixes below. A page may carry more than one `REGISTRATION` section (e.g. event registration and a separate merch pre-order form) — nothing restricts it, each is independent with its own `heading`/`body`/`formId` |
 | `TESTIMONIALS` | `heading?, items: { quote, name?, photoUrl? }[]` (≥1), `acceptSubmissions?: boolean`. When `acceptSubmissions` is on, a visitor can submit their own testimony from the public page (see "Visitor-submitted testimonials" below) — approved ones are merged into `items` server-side, so `items` returned by the public/preview routes may be longer than what was saved |
 | `FAQ` | `heading?, items: { question, answer }[]` (≥1) |
 | `MERCH` | `heading?, imageUrl, linkLabel?, linkUrl?` (`linkLabel`/`linkUrl` paired — both or neither) — a single promotional image/poster plus an optional CTA link, e.g. a merch flyer or a pre-order banner |
+| `COUNTDOWN` | `heading?, targetDate, expiredMessage?` — a live days/hours/minutes/seconds count down to `targetDate`, the one section whose content carries a **real machine-readable instant** rather than free text (unlike `HERO.dateRangeText`/`SCHEDULE`'s day labels). `targetDate` must be a value `Date.parse` accepts (rejected with a 400 otherwise); discuva-admin's editor captures it via a `datetime-local` input and converts it to a full ISO instant with `new Date(local).toISOString()` at the moment it's picked, so the stored value is timezone-correct for every visitor with no backend timezone plumbing needed — see that repo's `CountdownContent` comment. Rendering (discuva-member's `CountdownTimer`) is a `"use client"` island using `useSyncExternalStore` (not `useState`+`useEffect`) to tick a 1s `setInterval` against `Date.now()`, with `getServerSnapshot` returning `null` so SSR renders nothing rather than baking in the server's clock and mismatching on hydration |
+| `FOOTER` | `heading?, text?, links?: { label, url }[], socialLinks?: { platform, url }[], showCopyright?, showContactInfo?`. `platform` ∈ `FOOTER_SOCIAL_PLATFORMS` (`'instagram' \| 'facebook' \| 'youtube' \| 'tiktok' \| 'x' \| 'website'`) — a small fixed set, not free text. `showCopyright` defaults to `true` (the church name + current year); `showContactInfo` defaults to `false` (the tenant's own `address`/`supportEmail`, never typed per page — see `church` below). See "Every page gets a footer" below for why this type is optional and how it interacts with the automatic default |
+
+**Every page gets a footer, whether or not it has a `FOOTER` section** — a direct feature request ("can we introduce
+a footer?"). `PublicPageDto`/the preview DTO both gained a `church: { name, address, supportEmail }` field
+(`PageService.resolveChurchInfo`), the current tenant's own info resolved via `ClsService<AppClsStore>` +
+`tenantRepo.findOneBy`, sharing the same `tenant-branding:${tenantId}` cache entry `EmailQueueService`/
+`PdfService`/`TenantCurrencyService` already populate (see `TenantCurrencyService`'s own comment on that shared
+key) — a fourth call site of the same established pattern, not a new abstraction. `PagesModule` gained a plain
+`TypeOrmModule.forFeature([Tenant])` for this (`Tenant` is a public-schema, control-plane entity, same reasoning
+`UtilityModule`'s own registration of it documents — not `TenantTypeOrmModule`). No tenant CLS context (shouldn't
+happen for a real request here) falls back to the `CHURCH_NAME` env default with no address/email, mirroring
+`TenantCurrencyService`'s own defensive fallback.
+
+discuva-member's `app/p/[slug]/page.tsx` renders whichever `FOOTER` section(s) a page has (if any) **pinned to the
+very bottom**, regardless of where they sit in `sections` — pulled out of the normal per-section `.map()` into a
+separate pass, since a footer belongs at the end of the page, not wherever an admin happened to drag it in the
+builder's reorderable list (discuva-admin's own `SECTION_TYPE_META.FOOTER.description` says this explicitly, so
+it's not a surprise). When a page has **no** `FOOTER` section, `AutoFooter` renders instead — a small, fixed,
+non-editable footer (church name + `© {year}`, nothing else) so a page never just stops abruptly after its last
+content section. Adding a real `FOOTER` section **replaces** that default entirely with whatever the admin
+configures (custom text, links, social links, copyright toggle, contact-info toggle) — there's no partial-merge
+between the two. Nothing stops an admin from adding more than one `FOOTER` section (same as any other type); all
+of them render, in their relative order, rather than silently keeping just one.
+
+**`socialLinks` render as real brand icons, not text labels** — a real user-reported gap: the first version rendered
+each `socialLinks` entry as its platform name in plain text (e.g. "Instagram"), which read as an unfinished-looking
+placeholder rather than the icon row every other footer on the web uses. `lucide-react` (the icon set used
+everywhere else in this app) deliberately ships no brand/logo icons at all — a trademark-scope decision on their
+end, confirmed by checking the installed package's own icon manifest, not a version mismatch. Rather than pull in
+a whole extra icon-library dependency for five icons, discuva-member's new `components/pages/social-icons.tsx`
+inlines each one as plain SVG path data sourced from **Simple Icons** (free, CC0-licensed, the standard credible
+source for brand marks — the same data every major icon library re-exports under the hood) — `InstagramIcon`,
+`FacebookIcon`, `YoutubeIcon`, `TiktokIcon`, `XIcon`. `'website'` (the one non-brand entry — nothing to show a logo
+for) keeps a plain generic icon, `lucide-react`'s own `Globe`. Each renders inside a filled circular badge
+(`FOOTER_SOCIAL_PLATFORM_ICON` lookup in `section-renderer.tsx`): `style.accentColor` (or the page's own, via the
+same `effectiveAccentColor` fallback every other section uses) becomes the badge's background, with
+`ctaTextColorClass` — the same helper `MerchSection`'s CTA button already uses — picking white or near-black icon
+color for contrast; with no accent set, a theme-appropriate neutral fill (`bg-white/10` under Bold, `bg-[#121212]/5`
+under Minimal) is used instead. Each link keeps `aria-label`/`title` set to the platform's full name (e.g. "X
+(Twitter)") for accessibility, since the visible content is now icon-only.
+
+**`REGISTRATION`'s embedded form card (discuva-member, `components/forms/embedded-form-fill.tsx`)** — several
+usability fixes, all in this one shared component (not Pages-specific, but only ever mounted from
+`RegistrationSection`):
+- **The form's own `title` now renders** as a heading above `description`. It never did before — only
+  `coverImageUrl` and `description` rendered, so a form whose admin had typed a placeholder/test string into
+  `description` (with nothing above it for visual context) read as a stray, unstyled label rather than a proper
+  form name. `title` is unconditional (a `Form` always has one); its own bottom margin absorbs `description`'s
+  `mb-5` when `description` is unset, so the gap before the first field stays consistent either way.
+- **`align`, when set on the `REGISTRATION` section's `style` and `layout` is `'stacked'` (the default), keeps
+  each theme's original default** when unset — `'bold'` still centers the heading/body and card by default,
+  `'minimal'` still left-aligns, exactly as before this knob existed. `textAlignClass`'s own "unset → center"
+  fallback is deliberately **not** reused here for that reason: applying it directly would have silently
+  re-centered every already-published Minimal-theme `REGISTRATION` section the moment this shipped.
+- **Long forms are handled two ways, not just a hint** — a real regression risk flagged by a user testing an
+  actual (short) test form and asking "what happens with a lot of fields": a hint alone doesn't stop a long
+  unpaginated form from visually dominating the page if an admin never acts on it.
+  - **Discoverability, unchanged from the first pass**: `PaginatedFormFillFields` already becomes a real
+    Back/Next wizard with a progress bar the moment any `FormField` on the underlying `Form` has a `pageIndex`
+    set — that mechanism already existed and needed no changes. discuva-admin's `RegistrationEditor` shows an
+    inline hint ("consider splitting it into steps") whenever the selected form has ≥6 fields and they're all
+    still on one page (`LONG_FORM_FIELD_THRESHOLD`, `app/pages/sections-editor.tsx`) — a hint, never a block,
+    since a genuinely short form is fine flat.
+  - **Auto-chunking as the safety net for when an admin doesn't act on the hint**: `EmbeddedFormFill`'s
+    `withAutoChunkedPages` groups a form's fields into synthetic pages of 5 (`AUTO_CHUNK_SIZE`) purely for
+    rendering, whenever a form has ≥6 fields (`AUTO_CHUNK_FIELD_THRESHOLD`) and the admin never set any explicit
+    `pageIndex` — no data is written back, and the standalone `/forms/public/:id` fill page
+    (`PublicFormFillClient`) is entirely unaffected, since it calls `PaginatedFormFillFields` directly with the
+    real fields rather than through this function. An admin who *does* set explicit `pageIndex` values (real,
+    deliberate groupings via the hint) is left alone completely — auto-chunking only ever fills a gap, never
+    overrides a real choice.
+  - **A height cap as a backstop for the remaining edge case** — an admin who explicitly paginates but still
+    dumps too many fields onto one page bypasses auto-chunking (any field with `pageIndex > 0` counts as "already
+    split"). `PaginatedFormFillFields` gained an opt-in `capFieldsHeight` prop that wraps just the current page's
+    fields (not the progress bar or Back/Next/Submit row, which stay outside the scroll region and always
+    visible) in a `max-h-[480px] overflow-y-auto` container. Opt-in and Pages-only: the standalone fill page
+    never passes it, so its behavior is unchanged; only `EmbeddedFormFill` passes `capFieldsHeight` (always —
+    harmless for a short page, since it never reaches 480px).
+  - Pagination itself stays a Forms-builder concept either way, not something reimplemented inside Pages —
+    auto-chunking is a rendering-only fallback, not a second pagination mechanism.
+- **Field input text is explicitly dark** (`components/forms/form-fill-fields.tsx`'s `inputClass`) — a real
+  regression caught by a user typing into a live Bold-themed page: the shared `inputClass` (used by every
+  text/number/email/phone/date input, `<textarea>`, and `<select>`) never set its own text color, so it silently
+  *inherited* the ambient page text color. On the standalone `/forms/public/:id` fill page that's always been
+  browser-default black against a light page, so it never looked broken — but the embedded card is always
+  white/light regardless of the *Page's* theme (see `RegistrationSection`'s own comment), and a Bold-themed page
+  sets `text-[var(--bold-fg)]` (white, for a dark background) on its outer wrapper. That white color cascaded all
+  the way into the input's typed text, invisible against the input's own light `#F9F9F9` background — labels and
+  placeholders already had their own explicit gray, which is why only the *typed value* went missing. Fixed by
+  adding an explicit `text-[#121212]` to `inputClass` itself, benefiting both the embed and (harmlessly, since it
+  already rendered dark by default) the standalone fill page.
+- **The multi-page progress bar now carries a "Step X of Y" label** (`PaginatedFormFillFields`'s `ProgressBar`) —
+  the bar was a bare, unlabeled `h-0.5` line; a real visitor mistook it for how much of the *form* they'd filled
+  in (field-completion progress) rather than which *page* of the wizard they were on. Benefits every multi-page
+  form everywhere the shared component renders, not just Pages.
+- **That label's count reacts to conditional visibility, not just structural `pageIndex`** — a second real report:
+  a page whose only field is conditionally shown (e.g. a "which team?" follow-up that only appears once "Want to
+  volunteer?" is answered "Yes") left the label reading "Step 1 of 2" even when the current answers meant page 2
+  had nothing visible on it — while the Submit button (`isLastPage`, computed via the same `isFieldVisible` check)
+  already correctly knew there was no reachable second page and showed itself instead of "Next". The two
+  disagreeing was the actual bug. `visiblePageIndices` (new) recomputes, on every render, which structural pages
+  currently have ≥1 visible field given the live `values`; `isSinglePage` and the bar's `current`/`total` are both
+  driven by this instead of the raw structural `pageCount`, so the label now always agrees with what the button is
+  about to do. Deliberately **not** the same kind of value as `page` itself (the currently-mounted page index) —
+  that one must stay fixed while the visitor is looking at it, precisely so an earlier answer changing mid-view
+  can't yank them off their current page (see this component's own file comment); recomputing what the label
+  *displays* carries none of that risk, since it never triggers navigation on its own.
+- **A form's own name/description can be hidden** (`RegistrationContent.hideFormMeta`, boolean, off by default) —
+  a direct consequence of the `title`-rendering fix above: once a form's own name became visible, an admin whose
+  `REGISTRATION` section already has its own heading/body (or whose form's title/description was never meant to
+  be visitor-facing, e.g. an internal name) needed a way to suppress it again. `EmbeddedFormFill` takes a
+  `hideMeta` prop; `RegistrationSection` passes `content.hideFormMeta` straight through. Not validated
+  server-side — a plain boolean UI flag, same "harmless if malformed" precedent `HERO.hideOverlayText` already
+  sets.
+- **A true two-column split layout** (`style.layout: 'split'`, distinct from `align`) puts the heading/body in its
+  own column beside the white form card, side by side — mirrors `ABOUT.content.layout`'s own stacked/split
+  concept, but lives in `style` rather than `content` since it's a page-builder layout choice, not something the
+  section's meaning depends on. Falls back to stacked when there's no heading/body to put in the text column,
+  same "nothing to split against" guard `ABOUT`'s own split uses for its image. **When `layout` is `'split'`,
+  `align` is repurposed**: `'left'` puts the form card on the left (text right), anything else (including unset)
+  puts it on the right (text left) — the same "unset defaults to the same side `ABOUT`'s own `imagePosition`
+  defaults to" convention. discuva-admin's `SectionStyleControls` reflects this by swapping the Alignment
+  control's label and options to "Form Position" (Left/Right only, no Center) whenever `style.layout === 'split'`
+  is selected for that section. The two columns use `items-center`, not `items-start` — the form card's height
+  varies with field count/pagination and the text column's with copy length, so the two are rarely equal; a real
+  page with short copy next to a multi-field form showed a visibly empty gap under the text with `items-start`,
+  which `items-center` redistributes evenly above and below instead. The text column also needs `space-y-3` on
+  its `FormattedText` wrapper (a real gap fixed alongside this) — without it, multiple blank-line-separated
+  paragraphs in `body` render with no visible space between them, since Tailwind's preflight zeroes `<p>` margins
+  by default.
+
+**`sectionHeadingClass` now scales up on desktop, not a flat `text-2xl`** (discuva-member, shared by every
+`content.heading` on Speakers/Schedule/Testimonials/FAQ/Merch/Countdown) — a real, measured report: it was the
+one heading treatment in this whole file with no responsive scale-up at all (24px at every viewport), while every
+other heading (`HeroSection`'s title, `AboutSection`'s `splitHeadingClass`, `RegistrationSection`'s own
+`splitHeadingClass`) scales up via a `md:` breakpoint. Confirmed via `getComputedStyle` against a real page — FAQ
+measured `24px` next to a sibling split heading measuring `30px` for what's visually the same role. Now
+`text-2xl md:text-3xl`, matching `RegistrationSection`'s split heading exactly; fixing the shared function fixes
+all six section types at once, not just the one that got reported.
+
+**FAQ answer text is no longer two legibility cuts stacked on the question at once** (discuva-member,
+`FaqAccordion`) — the question is `text-sm font-medium`; the answer was `text-xs font-light` at 70% foreground
+opacity — three separate reductions (size, weight, *and* opacity) compounding into text a user directly compared
+unfavorably against a reference page, where question/answer stay much closer in size, differentiated mainly by
+color. Now `text-sm` (same size as the question) with the default weight (no `font-light`) and `--bold-fg-80`/
+`text-gray-600` (up from `-70`/`text-gray-500`) — confirmed via `getComputedStyle` against a real page: answer
+went from `12px`/300-weight/70%-opacity to `14px`/400-weight/80%-opacity, now matching the question's `14px`
+exactly.
+
+**FAQ gained a `size` knob** (the one addition, not a general heading/subheading/body scale system — considered
+and deliberately declined; see below) — `style.size`, added to `SECTION_STYLE_APPLICABILITY.FAQ` alongside its
+existing `accentColor`, scales the section heading *and* the question/answer text **together**, as one bounded
+4-option choice, never as independent controls per element. `sectionHeadingClass` (discuva-member,
+`section-renderer.tsx`) gained an optional second parameter — a size-class override defaulting to its existing
+`text-2xl md:text-3xl`, so the other five callers (Speakers/Schedule/Testimonials/Merch/Countdown) are completely
+unaffected by its existence. `FAQ_HEADING_SIZE_CLASS`/`FAQ_TEXT_SIZE_CLASS` (`section-style.ts`) hold the four
+buckets; `md` is deliberately identical to the pre-existing defaults (`text-2xl md:text-3xl` heading, `text-sm`
+question/answer), so an unset `size` renders byte-for-byte the same as before this knob existed. `FaqAccordion`
+gained a `textSizeClass` prop (default `"text-sm"`) applied to both the question `<span>` and the answer `<p>`,
+keeping them the same size at every bucket — matching the same "question and answer stay close in size" reasoning
+the legibility fix just above already established. **Why not a general text-size system**: raised directly by a
+user after several rounds of "this text is too small" reports — every prior report turned out to be a real bug or
+inconsistency (missing responsive scale-up, three compounding legibility cuts), not a case where a well-tuned
+default was simply wrong for one church's taste. Exposing independent heading/subheading/body size controls
+across every section would trade "consistently coherent defaults, tuned together" for "combinatorially many ways
+for a page to look mismatched" — a larger source of future complaints, not a smaller one. The existing `size`
+knob (Stats/Speakers/Merch/Countdown, now FAQ) stays the deliberately narrow shape: one bounded, 4-option "how
+prominent is this section's main content" choice per section, extended only where a real reported need shows up,
+never a raw pixel-scale system.
+
+**`size` extended to every section's body/paragraph text** — a direct follow-up request ("add this to every body
+text in the pages setup"), applied to HERO's subtitle, ABOUT's body (both stacked and split), REGISTRATION's body
+(both stacked and split), and TESTIMONIALS' quote, via `SECTION_STYLE_APPLICABILITY.HERO`/`ABOUT`/`REGISTRATION`/
+`TESTIMONIALS` in discuva-admin each gaining a `size` entry (ABOUT's is set unconditionally on the static table
+entry rather than in `getStyleApplicability`'s dynamic split/stacked branch, since — unlike `align` — body text
+exists in both layouts). This is not the declined general system: it's the same one bounded `size` knob each
+section already had a slot for, just exposed for more sections' plain paragraph copy, not an independent
+heading/subheading/body control added on top. `FAQ_TEXT_SIZE_CLASS` (discuva-member, `section-style.ts`) was
+renamed to `BODY_TEXT_SIZE_CLASS` and its comment widened accordingly — `sm`/`md`/`lg`/`xl` map to `text-xs`/
+`text-sm`/`text-base`/`text-lg`, shared by every one of these callers rather than a per-section table, since plain
+body copy doesn't need section-specific buckets the way Stats/Speakers/Merch/Countdown's *one prominent element*
+knobs do. Every call site follows the **"only override when explicitly set"** pattern (`style?.size ?
+BODY_TEXT_SIZE_CLASS[style.size] : <original hardcoded default>`) rather than forcing an unset `size` through
+`md`, because About and Registration each already had **two different** pre-existing defaults (stacked vs. split)
+that a single `md` bucket can't simultaneously reproduce — leaving `size` unset must still render byte-for-byte
+identical to every already-published page regardless of which layout it's in.
+
+**Size control now explains what it resizes** — with the knob live on 9 of 10 section types, "Small/Medium/Large/
+X-Large" alone (no caption, unlike Spacing's always-present "Room above and below this section..." line) left an
+admin unable to tell what clicking it would actually change without trial and error. `StyleApplicability.size`
+changed from a plain `boolean` to a `string` — the presence check (`applicability.size &&`) and the caption text
+are now the same value, so there's no separate lookup table that could drift out of sync with the applicability
+table itself. Each section type gets its own one-line caption (e.g. Stats: "Size of the stat numbers.", Speakers:
+"Size of each speaker's photo.", Registration: "Size of the heading and body text beside the form.", FAQ: "Size of
+the heading and the question/answer text."), rendered by `SectionStyleControls` directly under the Size buttons,
+matching the Spacing control's existing caption pattern exactly.
 
 **Validation is envelope-only at the DTO layer** (`PageSectionDto`: `id`/`type`/`content` as a plain object) —
 per-type structural validation happens in `PageService.assertValidSections`, a `switch (section.type)` checking
@@ -4386,17 +4730,18 @@ the tenant's name and its published pages).
 | POST   | `/pages`                    | AdminGuard (PAGES_WRITE) | Create a page with its sections in one call |
 | GET    | `/pages`                    | AdminGuard (PAGES_READ)  | List all pages — unpaginated, same policy as Forms |
 | GET    | `/pages/:id`                | AdminGuard (PAGES_READ)  | Get one page with sections |
-| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`theme`/`accentColor`/`sections` write to `draft*` only (an array = replace wholesale, no per-section id to diff against); `slug`/`isPublished` still write live immediately |
+| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`theme`/`accentColor`/`backgroundColor`/`fontFamily`/`sections` write to `draft*` only (an array = replace wholesale, no per-section id to diff against; each section may carry an optional `style: {align?, columns?, size?, accentColor?}` and an optional `hidden: boolean`); `slug`/`isPublished` still write live immediately |
 | DELETE | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Delete a page |
 | POST   | `/pages/:id/publish`        | AdminGuard (PAGES_WRITE) | Copies every `draft*` field onto its live counterpart and sets `isPublished = true` |
+| POST   | `/pages/:id/duplicate`      | AdminGuard (PAGES_WRITE) | Body `{ slug, title? }`. Copies the source page's current draft into a brand-new, unpublished page under the given slug — see PageService.duplicate's own comment |
 | POST   | `/pages/:id/images`         | AdminGuard (PAGES_WRITE) | Multipart, field name `file`, max size `MAX_PAGE_IMAGE_UPLOAD_MB`. Generic upload for any section's image slot — returns `{ url, publicId }` only, doesn't touch the page row |
 | POST   | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Multipart, field name `file`. Sets `Page.draftOgImageUrl` |
 | DELETE | `/pages/:id/og-image`       | AdminGuard (PAGES_WRITE) | Clears the draft OG image |
 | GET    | `/pages/:id/testimonial-submissions` | AdminGuard (PAGES_READ) | Optional `?status=PENDING\|APPROVED\|REJECTED`. Moderation queue for a `TESTIMONIALS` section with `acceptSubmissions` on |
 | PATCH  | `/pages/:id/testimonial-submissions/:submissionId` | AdminGuard (PAGES_WRITE) | Body `{ status: 'APPROVED' \| 'REJECTED' }` |
 | GET    | `/pages/public`             | Public                   | Every published page for the resolved tenant — `{slug, title, seoDescription, updatedAt}` only |
-| GET    | `/pages/public/:slug`       | Public, `404` unless `isPublished` | Returns the full `PublicPageDto` (now including `theme`/`accentColor`) — every section verbatim, nothing stripped |
-| GET    | `/pages/public/:slug/preview` | Public, `?token=` must match `previewToken` | Same `PublicPageDto` shape, sourced from `draft*` — no `isPublished` check |
+| GET    | `/pages/public/:slug`       | Public, `404` unless `isPublished` | Returns the full `PublicPageDto` (`theme`/`accentColor`/`backgroundColor`/`fontFamily`) — every section verbatim including its optional `style`, except any section with `hidden: true` (dropped from the array entirely) |
+| GET    | `/pages/public/:slug/preview` | Public, `?token=` must match `previewToken` | Same `PublicPageDto` shape (hidden sections filtered the same way), sourced from `draft*` — no `isPublished` check |
 | POST   | `/pages/public/:slug/testimonials` | Public, rate-limited (5/min) | Body `{ sectionId, quote, name? }`. `202`, no content. Lands `PENDING` — rejected outright unless `sectionId` is a `TESTIMONIALS` section on this page with `acceptSubmissions` on |
 
 ### Church Calendar (`src/church-calendar/`)

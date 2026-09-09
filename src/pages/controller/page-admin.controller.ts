@@ -25,6 +25,7 @@ import { UPLOAD_HARD_CEILING_BYTES } from '../../platform-admin/constant/known-p
 import { PageService } from '../service/page.service';
 import {
   CreatePageDto,
+  DuplicatePageDto,
   ModerateTestimonialSubmissionDto,
   UpdatePageDto,
 } from '../dto/page.dto';
@@ -95,6 +96,17 @@ export class PageAdminController {
   @Post(':id/publish')
   publish(@Param('id', ParseUUIDPipe) id: string) {
     return this.pageService.publish(id);
+  }
+
+  // Reuses an existing page's current draft as the starting point for a
+  // brand-new one — see PageService.duplicate's own comment.
+  @RequiresPermission(AdminPermission.PAGES_WRITE)
+  @Post(':id/duplicate')
+  duplicate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DuplicatePageDto,
+  ) {
+    return this.pageService.duplicate(id, dto);
   }
 
   @RequiresPermission(AdminPermission.PAGES_WRITE)

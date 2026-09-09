@@ -1,15 +1,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { ClsService } from 'nestjs-cls';
 import { PageService } from './page.service';
 import { Page } from '../entity/page.entity';
 import { TestimonialSubmission } from '../entity/testimonial-submission.entity';
 import { Form } from '../../forms/entity/form.entity';
+import { Tenant } from '../../tenant/entity/tenant.entity';
 import {
   PageSectionType,
   TestimonialSubmissionStatus,
 } from '../enum/page.enum';
 import { CloudinaryService } from '../../utility/service/cloudinary.service';
+import { CacheService } from '../../utility/service/cache.service';
 import { CreatePageDto } from '../dto/page.dto';
 
 const mockPageRepo = {
@@ -32,6 +36,29 @@ const mockCloudinaryService = {
   uploadBuffer: jest.fn(),
   deleteByPublicId: jest.fn(),
 };
+// No tenant CLS context by default — resolveChurchInfo() falls back to the
+// CHURCH_NAME env default, same as TenantCurrencyService's own fallback.
+// This is what makes `church` a stable, known value in every existing test
+// below that doesn't itself set up a tenant.
+const mockTenantRepo = { findOneBy: jest.fn() };
+const mockCls = { get: jest.fn().mockReturnValue(undefined) };
+const mockCacheService = {
+  getOrSet: jest
+    .fn()
+    .mockImplementation((_key: string, fn: () => Promise<unknown>) => fn()),
+};
+const ENV_DEFAULTS: Record<string, string | number> = {
+  CHURCH_NAME: 'Test Church',
+  CACHE_TTL_REFERENCE_SECONDS: 300,
+};
+const mockConfigService = {
+  get: jest.fn((key: string) => ENV_DEFAULTS[key]),
+};
+const DEFAULT_CHURCH = {
+  name: 'Test Church',
+  address: null,
+  supportEmail: null,
+};
 
 describe('PageService', () => {
   let service: PageService;
@@ -39,6 +66,10 @@ describe('PageService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockTestimonialSubmissionRepo.find.mockResolvedValue([]);
+    mockCls.get.mockReturnValue(undefined);
+    mockConfigService.get.mockImplementation(
+      (key: string) => ENV_DEFAULTS[key],
+    );
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PageService,
@@ -48,7 +79,11 @@ describe('PageService', () => {
           provide: getRepositoryToken(TestimonialSubmission),
           useValue: mockTestimonialSubmissionRepo,
         },
+        { provide: getRepositoryToken(Tenant), useValue: mockTenantRepo },
         { provide: CloudinaryService, useValue: mockCloudinaryService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: ClsService, useValue: mockCls },
+        { provide: CacheService, useValue: mockCacheService },
       ],
     }).compile();
     service = module.get(PageService);
@@ -206,6 +241,37 @@ describe('PageService', () => {
                     {
                       label: 'Day 1',
                       entries: [{ time: '10 AM', title: 'Opening' }],
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts a SCHEDULE day with a date and a per-day venue', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.SCHEDULE,
+                content: {
+                  days: [
+                    {
+                      label: 'Day 1',
+                      date: 'Friday, August 28th',
+                      venue: 'Mercy Seat, Lagos',
+                      entries: [{ time: '10 AM', title: 'Opening' }],
+                    },
+                    {
+                      label: 'Day 2',
+                      venue: 'Discovery Centre, Obanikoro',
+                      entries: [{ time: '2 PM', title: 'Main Service' }],
                     },
                   ],
                 },
@@ -410,28 +476,196 @@ describe('PageService', () => {
       ).resolves.toBeDefined();
     });
 
-    it('defaults theme to minimal and accentColor to null when omitted', async () => {
+    it('rejects a COUNTDOWN section missing targetDate', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              { id: 'sec-1', type: PageSectionType.COUNTDOWN, content: {} },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a COUNTDOWN section with an unparseable targetDate', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.COUNTDOWN,
+                content: { targetDate: 'not-a-date' },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('accepts a valid COUNTDOWN section', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.COUNTDOWN,
+                content: {
+                  heading: 'Countdown to YFC 2026',
+                  targetDate: '2026-11-27T09:00:00.000Z',
+                  expiredMessage: "We're live!",
+                },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts an empty FOOTER section (every field is optional)', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              { id: 'sec-1', type: PageSectionType.FOOTER, content: {} },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts a fully-populated FOOTER section', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.FOOTER,
+                content: {
+                  heading: 'Get In Touch',
+                  text: 'Thanks for being part of this.',
+                  showCopyright: false,
+                  showContactInfo: true,
+                  links: [
+                    {
+                      label: 'Privacy Policy',
+                      url: 'https://example.com/privacy',
+                    },
+                  ],
+                  socialLinks: [
+                    {
+                      platform: 'instagram',
+                      url: 'https://instagram.com/example',
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('rejects a FOOTER link missing a label or url', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.FOOTER,
+                content: { links: [{ label: 'Privacy Policy' }] },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a FOOTER social link with an unrecognized platform', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.FOOTER,
+                content: {
+                  socialLinks: [
+                    { platform: 'myspace', url: 'https://myspace.com/example' },
+                  ],
+                },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a non-boolean FOOTER showCopyright/showContactInfo', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.FOOTER,
+                content: { showCopyright: 'yes' },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('defaults theme to minimal and accentColor/backgroundColor/fontFamily to null when omitted', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(null);
       await service.create(makeDto());
       expect(mockPageRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
           theme: 'minimal',
           accentColor: null,
+          backgroundColor: null,
+          fontFamily: null,
           draftTheme: 'minimal',
           draftAccentColor: null,
+          draftBackgroundColor: null,
+          draftFontFamily: null,
         }),
       );
     });
 
-    it('sets theme/accentColor on both live and draft when provided', async () => {
+    it('sets theme/accentColor/backgroundColor/fontFamily on both live and draft when provided', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(null);
-      await service.create(makeDto({ theme: 'bold', accentColor: '#f97316' }));
+      await service.create(
+        makeDto({
+          theme: 'bold',
+          accentColor: '#f97316',
+          backgroundColor: '#1a1030',
+          fontFamily: 'poppins',
+        }),
+      );
       expect(mockPageRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
           theme: 'bold',
           accentColor: '#f97316',
+          backgroundColor: '#1a1030',
+          fontFamily: 'poppins',
           draftTheme: 'bold',
           draftAccentColor: '#f97316',
+          draftBackgroundColor: '#1a1030',
+          draftFontFamily: 'poppins',
         }),
       );
     });
@@ -456,6 +690,106 @@ describe('PageService', () => {
       ...overrides,
     };
   }
+
+  describe('duplicate', () => {
+    it('copies the source draft into a new, unpublished page under the given slug', async () => {
+      mockPageRepo.findOneBy
+        .mockResolvedValueOnce(
+          makeExistingPage({
+            isPublished: true,
+            draftTitle: 'Higher Ground 2026',
+            draftSeoDescription: 'A conference',
+            draftTheme: 'bold',
+            draftAccentColor: '#f97316',
+            draftBackgroundColor: '#1a1030',
+            draftFontFamily: 'poppins',
+            draftSections: [heroSection, faqSection],
+          }),
+        )
+        .mockResolvedValueOnce(null); // assertSlugAvailable: new slug is free
+      await service.duplicate('page-1', { slug: 'higher-ground-2026-copy' });
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          slug: 'higher-ground-2026-copy',
+          title: 'Higher Ground 2026 (Copy)',
+          seoDescription: 'A conference',
+          isPublished: false,
+          theme: 'bold',
+          accentColor: '#f97316',
+          backgroundColor: '#1a1030',
+          fontFamily: 'poppins',
+          sections: [heroSection, faqSection],
+          draftTitle: 'Higher Ground 2026 (Copy)',
+          draftSections: [heroSection, faqSection],
+        }),
+      );
+    });
+
+    it('uses an explicit title override instead of the "(Copy)" default when given', async () => {
+      mockPageRepo.findOneBy
+        .mockResolvedValueOnce(makeExistingPage())
+        .mockResolvedValueOnce(null);
+      await service.duplicate('page-1', {
+        slug: 'a-new-slug',
+        title: 'A Totally Different Title',
+      });
+      expect(mockPageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'A Totally Different Title',
+          draftTitle: 'A Totally Different Title',
+        }),
+      );
+    });
+
+    it('deep-clones sections rather than sharing references with the source', async () => {
+      mockPageRepo.findOneBy
+        .mockResolvedValueOnce(
+          makeExistingPage({ draftSections: [heroSection] }),
+        )
+        .mockResolvedValueOnce(null);
+      await service.duplicate('page-1', { slug: 'a-new-slug' });
+      const savedArg = mockPageRepo.save.mock.calls[0][0];
+      expect(savedArg.sections).toEqual([heroSection]);
+      expect(savedArg.sections).not.toBe(heroSection);
+      expect(savedArg.sections[0]).not.toBe(heroSection);
+    });
+
+    it('rejects a slug already in use by another page', async () => {
+      mockPageRepo.findOneBy
+        .mockResolvedValueOnce(makeExistingPage())
+        .mockResolvedValueOnce({ id: 'page-2' });
+      await expect(
+        service.duplicate('page-1', { slug: 'taken-slug' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('404s when the source page does not exist', async () => {
+      mockPageRepo.findOneBy.mockResolvedValueOnce(null);
+      await expect(
+        service.duplicate('missing', { slug: 'a-new-slug' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('re-validates the source draft sections before duplicating (e.g. a linked form deleted since)', async () => {
+      mockPageRepo.findOneBy
+        .mockResolvedValueOnce(
+          makeExistingPage({
+            draftSections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.REGISTRATION,
+                content: { formId: 'deleted-form' },
+              },
+            ],
+          }),
+        )
+        .mockResolvedValueOnce(null);
+      mockFormRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.duplicate('page-1', { slug: 'a-new-slug' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
 
   describe('update', () => {
     it('writes title/seoDescription/sections to their draft* counterparts, never live', async () => {
@@ -525,17 +859,31 @@ describe('PageService', () => {
       );
     });
 
-    it('routes theme/accentColor to draftTheme/draftAccentColor, not live', async () => {
+    it('routes theme/accentColor/backgroundColor/fontFamily to draft*, not live', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(
-        makeExistingPage({ theme: 'minimal', accentColor: null }),
+        makeExistingPage({
+          theme: 'minimal',
+          accentColor: null,
+          backgroundColor: null,
+          fontFamily: null,
+        }),
       );
-      await service.update('page-1', { theme: 'bold', accentColor: '#f97316' });
+      await service.update('page-1', {
+        theme: 'bold',
+        accentColor: '#f97316',
+        backgroundColor: '#1a1030',
+        fontFamily: 'bebas-neue',
+      });
       expect(mockPageRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
           theme: 'minimal',
           accentColor: null,
+          backgroundColor: null,
+          fontFamily: null,
           draftTheme: 'bold',
           draftAccentColor: '#f97316',
+          draftBackgroundColor: '#1a1030',
+          draftFontFamily: 'bebas-neue',
         }),
       );
     });
@@ -610,18 +958,27 @@ describe('PageService', () => {
       expect(mockCloudinaryService.deleteByPublicId).not.toHaveBeenCalled();
     });
 
-    it('copies draftTheme/draftAccentColor onto the live columns', async () => {
+    it('copies draftTheme/draftAccentColor/draftBackgroundColor/draftFontFamily onto the live columns', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(
         makeExistingPage({
           theme: 'minimal',
           accentColor: null,
+          backgroundColor: null,
+          fontFamily: null,
           draftTheme: 'bold',
           draftAccentColor: '#f97316',
+          draftBackgroundColor: '#1a1030',
+          draftFontFamily: 'playfair',
         }),
       );
       await service.publish('page-1');
       expect(mockPageRepo.save).toHaveBeenCalledWith(
-        expect.objectContaining({ theme: 'bold', accentColor: '#f97316' }),
+        expect.objectContaining({
+          theme: 'bold',
+          accentColor: '#f97316',
+          backgroundColor: '#1a1030',
+          fontFamily: 'playfair',
+        }),
       );
     });
   });
@@ -644,8 +1001,38 @@ describe('PageService', () => {
         title: 'Higher Ground 2026',
         seoDescription: null,
         ogImageUrl: null,
+        church: DEFAULT_CHURCH,
         sections: [heroSection],
       });
+    });
+
+    it("includes the current tenant's church info, resolved via CLS + the shared tenant-branding cache entry", async () => {
+      mockPageRepo.findOneBy.mockResolvedValue({
+        id: 'page-1',
+        slug: 'higher-ground-2026',
+        sections: [heroSection],
+        isPublished: true,
+      });
+      mockCls.get.mockReturnValue('tenant-1');
+      mockTenantRepo.findOneBy.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Grace Chapel',
+        address: '123 Main St',
+        supportEmail: 'hello@gracechapel.example',
+      });
+
+      const result = await service.getForPublic('higher-ground-2026');
+
+      expect(result.church).toEqual({
+        name: 'Grace Chapel',
+        address: '123 Main St',
+        supportEmail: 'hello@gracechapel.example',
+      });
+      expect(mockCacheService.getOrSet).toHaveBeenCalledWith(
+        'tenant-branding:tenant-1',
+        expect.any(Function),
+        300,
+      );
     });
 
     it('404s for an unpublished or unknown slug', async () => {
@@ -653,6 +1040,21 @@ describe('PageService', () => {
       await expect(service.getForPublic('missing')).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('filters out sections with hidden: true, keeping everything else', async () => {
+      const hiddenSection = { ...faqSection, id: 'sec-hidden', hidden: true };
+      mockPageRepo.findOneBy.mockResolvedValue({
+        id: 'page-1',
+        slug: 'higher-ground-2026',
+        title: 'Higher Ground 2026',
+        seoDescription: null,
+        ogImageUrl: null,
+        sections: [heroSection, hiddenSection, faqSection],
+        isPublished: true,
+      });
+      const result = await service.getForPublic('higher-ground-2026');
+      expect(result.sections).toEqual([heroSection, faqSection]);
     });
   });
 
@@ -678,6 +1080,21 @@ describe('PageService', () => {
           sections: [heroSection, faqSection],
         }),
       );
+    });
+
+    it('filters out sections with hidden: true from the draft too', async () => {
+      const hiddenSection = { ...faqSection, id: 'sec-hidden', hidden: true };
+      mockPageRepo.findOneBy.mockResolvedValue(
+        makeExistingPage({
+          draftSections: [heroSection, hiddenSection, faqSection],
+          previewToken: 'correct-token',
+        }),
+      );
+      const result = await service.getForPreview(
+        'higher-ground-2026',
+        'correct-token',
+      );
+      expect(result.sections).toEqual([heroSection, faqSection]);
     });
 
     it('404s on a wrong token', async () => {

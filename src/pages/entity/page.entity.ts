@@ -1,6 +1,6 @@
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseEntity } from '../../utility/entity/base.entity';
-import { PageSectionType } from '../enum/page.enum';
+import { PageSectionType, SectionStyle } from '../enum/page.enum';
 
 // { id, type, content } — `id` is client-generated (uuid), not a DB row id:
 // sections live in a plain jsonb array (no relation), so there's nothing for
@@ -13,6 +13,18 @@ export interface PageSection {
   id: string;
   type: PageSectionType;
   content: Record<string, unknown>;
+  // Optional per-section style overrides — validated at the DTO boundary
+  // (page.dto.ts's SectionStyleDto), stored as a jsonb sibling to `content`.
+  // Unlike `content`, whose shape depends on `type`, style's shape is fixed
+  // regardless of section type — which fields actually apply per type is a
+  // discuva-admin UI concern, not something this entity or its DTO enforce.
+  style?: SectionStyle;
+  // A hidden section stays fully saved but never reaches a visitor —
+  // PageService.getForPublic/getForPreview both filter it out of the
+  // sections array they return, so discuva-member never needs to know this
+  // field exists at all. PageAdminController's raw GET /pages/:id (the
+  // builder's own read) returns it untouched, same as every other field.
+  hidden?: boolean;
 }
 
 @Entity({ name: 'pages' })
@@ -102,9 +114,34 @@ export class Page extends BaseEntity {
   @Column({ name: 'accent_color', nullable: true })
   accentColor: string | null;
 
+  // Only meaningful when theme is 'bold' — the section background itself,
+  // church-picked rather than the single fixed dark color this started
+  // with (a real gap for a multi-tenant product: every church has its own
+  // brand). Null falls back to that original default (see
+  // discuva-member's DEFAULT_BOLD_BG). Foreground text color is never
+  // stored — it's computed from this value's luminance at render time
+  // (discuva-member's resolveBoldColors), so whatever a church picks stays
+  // legible without them needing to think about contrast themselves.
+  @Column({ name: 'background_color', nullable: true })
+  backgroundColor: string | null;
+
   @Column({ name: 'draft_theme', default: 'minimal' })
   draftTheme: string;
 
   @Column({ name: 'draft_accent_color', nullable: true })
   draftAccentColor: string | null;
+
+  @Column({ name: 'draft_background_color', nullable: true })
+  draftBackgroundColor: string | null;
+
+  // A curated identifier (page.dto.ts's PAGE_FONTS), not a free-text font
+  // name — see SectionStyleDto's own file comment for why per-section fonts
+  // aren't supported. Null falls back to a sensible per-theme default
+  // (discuva-member's Part E font-rendering work), same "null = default"
+  // convention as backgroundColor.
+  @Column({ name: 'font_family', nullable: true })
+  fontFamily: string | null;
+
+  @Column({ name: 'draft_font_family', nullable: true })
+  draftFontFamily: string | null;
 }
