@@ -4724,6 +4724,16 @@ nothing for a crawler), and `app/llms.txt/route.ts` (`/llms.txt`, an emerging, n
 convention some LLM crawlers/agents read the way traditional crawlers read `robots.txt` — a markdown summary of
 the tenant's name and its published pages).
 
+**A preview link is explicitly `noindex, nofollow`, never just "not linked from anywhere."** `robots.ts`'s
+`allow: /p/` rule can't tell a preview URL (`?previewToken=...`) apart from the live one at the same path — it
+only ever sees the URL's path, not its query string — so that file alone doesn't keep a leaked preview link out of
+a search index. `generateMetadata` closes that gap directly: an unpublished/draft request (`resolved.isPreview`)
+now returns `{ robots: { index: false, follow: false } }` instead of falling through to an empty `{}` (which would
+silently inherit the default indexable behavior — Next only emits a `noindex` meta tag when a route's own
+`generateMetadata` says so). The rest of preview mode's existing "no OG/canonical/JSON-LD" posture is unchanged;
+this is strictly an addition, not a behavior change to the live path. A nonexistent slug doesn't need the same
+treatment — `notFound()` already produces a real 404, which no crawler indexes regardless of any meta tag.
+
 | Method | Route | Auth | Notes |
 |--------|-------|------|-------|
 | GET    | `/pages/platform-enabled`   | AdminGuard (PAGES_READ)  | `{ enabled: true }` always — the "Coming Soon" gate; reaching this handler at all already proves access (see above) |
