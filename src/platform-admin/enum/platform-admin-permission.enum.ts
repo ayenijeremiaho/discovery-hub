@@ -22,6 +22,14 @@ export enum PlatformAdminPermission {
   // ever needing to see or touch Discuva's own app secrets.
   SOCIAL_MEDIA_APPS_READ = 'social_media_apps:read',
   SOCIAL_MEDIA_APPS_WRITE = 'social_media_apps:write',
+  // The Pages module's own platform-wide rollout control (getPagesRollout/
+  // setPagesRollout) — previously reused TENANTS_READ/WRITE instead of
+  // having its own value, which left it with no distinct checkbox on the
+  // Admin Roles screen and no way to grant it without also granting full
+  // Tenants access. Split out to match SOCIAL_MEDIA_APPS_READ/WRITE's own
+  // precedent exactly.
+  PAGES_READ = 'pages:read',
+  PAGES_WRITE = 'pages:write',
   BILLING_READ = 'billing:read',
   BILLING_WRITE = 'billing:write',
   ANALYTICS_READ = 'analytics:read',
@@ -53,6 +61,8 @@ export const PLATFORM_ADMIN_PERMISSION_LABELS: Record<
     'Manage Communication Providers',
   [PlatformAdminPermission.SOCIAL_MEDIA_APPS_READ]: 'View Social Media Apps',
   [PlatformAdminPermission.SOCIAL_MEDIA_APPS_WRITE]: 'Manage Social Media Apps',
+  [PlatformAdminPermission.PAGES_READ]: 'View Pages',
+  [PlatformAdminPermission.PAGES_WRITE]: 'Manage Pages',
   [PlatformAdminPermission.BILLING_READ]: 'View Billing & Refunds',
   [PlatformAdminPermission.BILLING_WRITE]: 'Issue Refunds',
   [PlatformAdminPermission.ANALYTICS_READ]: 'View Platform Analytics',
@@ -105,6 +115,10 @@ export const PlatformAdminPermissionGroups: PlatformAdminPermissionGroup[] = [
   buildGroup('Social Media Apps', [
     PlatformAdminPermission.SOCIAL_MEDIA_APPS_READ,
     PlatformAdminPermission.SOCIAL_MEDIA_APPS_WRITE,
+  ]),
+  buildGroup('Pages', [
+    PlatformAdminPermission.PAGES_READ,
+    PlatformAdminPermission.PAGES_WRITE,
   ]),
   buildGroup('Billing', [
     PlatformAdminPermission.BILLING_READ,

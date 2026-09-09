@@ -436,19 +436,21 @@ export class PlatformAdminController {
   }
 
   // Same rollout mechanism as Social Media above, for the Pages module's
-  // own early-access rollout — gated by the Tenants permission (not a
-  // dedicated Pages one) since this is fundamentally the same tenant-access
-  // management action as the per-tenant module-override endpoint above,
-  // just with the "everyone" shortcut social media's own rollout also has.
+  // own early-access rollout — gated by its own dedicated permission,
+  // mirroring SOCIAL_MEDIA_APPS_READ/WRITE exactly (previously reused
+  // TENANTS_READ/WRITE, which left Pages with no distinct checkbox on the
+  // Admin Roles screen and coupled it to full Tenants access — see
+  // SplitPagesRolloutPermission migration for the backfill that keeps
+  // existing roles' access unchanged across this split).
   @UseGuards(PlatformAdminGuard)
-  @RequiresPlatformPermission(PlatformAdminPermission.TENANTS_READ)
+  @RequiresPlatformPermission(PlatformAdminPermission.PAGES_READ)
   @Get('pages/rollout')
   async getPagesRollout() {
     return this.tenantService.getPagesRollout();
   }
 
   @UseGuards(PlatformAdminGuard)
-  @RequiresPlatformPermission(PlatformAdminPermission.TENANTS_WRITE)
+  @RequiresPlatformPermission(PlatformAdminPermission.PAGES_WRITE)
   @Put('pages/rollout')
   async setPagesRollout(@Body() dto: SetModuleRolloutDto) {
     return this.tenantService.setPagesRollout(dto);

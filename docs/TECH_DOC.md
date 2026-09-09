@@ -3645,19 +3645,28 @@ showing the plan-upgrade-required gate.
 
 | Method | Route | Auth | Notes |
 |--------|-------|------|-------|
-| GET | `/platform/pages/rollout` | PlatformAdminGuard (TENANTS_READ) | `{enabled: boolean, tenantIds: string[]}`, same derivation as Social Media's but keyed on `pages` |
-| PUT | `/platform/pages/rollout` | PlatformAdminGuard (TENANTS_WRITE) | `{enabled: boolean, tenantIds: string[]}` — full replace, not incremental |
+| GET | `/platform/pages/rollout` | PlatformAdminGuard (PAGES_READ) | `{enabled: boolean, tenantIds: string[]}`, same derivation as Social Media's but keyed on `pages` |
+| PUT | `/platform/pages/rollout` | PlatformAdminGuard (PAGES_WRITE) | `{enabled: boolean, tenantIds: string[]}` — full replace, not incremental |
 
-Gated by the `Tenants` permission rather than a dedicated `PAGES_*` platform permission — unlike Social Media
-(which has its own permission pair because it already needs one for the Social Media Apps/OAuth-credentials page
-this rollout card lives on), Pages has no other platform-admin surface, so this is fundamentally the same
-tenant-access-management action as the generic per-tenant module-override endpoint above, just gated the same way.
+**Gated by its own dedicated `PlatformAdminPermission.PAGES_READ`/`PAGES_WRITE`, mirroring Social Media's
+`SOCIAL_MEDIA_APPS_READ`/`WRITE` exactly** — originally shipped reusing `TENANTS_READ`/`WRITE` instead (reasoning
+at the time: "Pages has no other platform-admin surface, so this is fundamentally the same tenant-access-
+management action as the generic per-tenant module-override endpoint"), which quietly broke two things: the Admin
+Roles screen had no distinct "Pages" checkbox group to grant/revoke ("not showing in the permission list" — a
+real report, not a hypothetical), and Pages access could never be granted independently of full Tenants access.
+Split via `SplitPagesRolloutPermission` migration (public schema, `platform_admin_roles`), which backfills
+`pages:read`/`pages:write` onto every existing role that already had `tenants:read`/`tenants:write` respectively —
+not scoped to a specific role name (role names change; see `RenamePlatformSuperAdminRole`) — so this is a pure
+permission-model fix with no access change for any role that already reached Pages through Tenants.
 
-**Frontend:** a standalone "Pages" page in discuva-platform's sidebar (`/pages`, `pages:read`/`pages:write` in the
-frontend's own permission scheme — unrelated to the tenant-schema `AdminPermission.PAGES_READ`/`PAGES_WRITE`
-documented in the Pages module section above, which gates the church-side admin builder instead), containing
-nothing but the same `RolloutPanel` pattern Social Media uses (on/off switch + searchable multi-select of
-churches). No apps/credentials section, since Pages has no third-party OAuth concept to register.
+**Frontend:** a standalone "Pages" page in discuva-platform's sidebar (`/pages`, gated by `pages:read` in both the
+sidebar nav item and the page's own `withAuth` — previously wired to `tenants:read`, the frontend half of the same
+bug above), containing nothing but the same `RolloutPanel` pattern Social Media uses (on/off switch + searchable
+multi-select of churches). Distinct from the tenant-schema `AdminPermission.PAGES_READ`/`PAGES_WRITE` documented
+in the Pages module section above, which gates the church-side admin builder instead — same permission *names*,
+two entirely disjoint enums/guards (`PlatformAdminPermission`/`PlatformAdminGuard` vs `AdminPermission`/
+`AdminGuard`), per `PlatformAdminPermission`'s own file comment. No apps/credentials section, since Pages has no
+third-party OAuth concept to register.
 
 **`departments` was Pro-only by accident, corrected via `AddDepartmentsToFreePlan`.** Unlike `tithe`, this had no
 migration or comment ever recording it as a deliberate gate — and it directly contradicted `KNOWN_MODULES`'s own
