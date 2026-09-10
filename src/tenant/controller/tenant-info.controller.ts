@@ -180,6 +180,13 @@ export class TenantInfoController {
   private async toProfile(tenant: Tenant) {
     return {
       name: tenant.name,
+      // Not sensitive — it's already visible in every discuva-member URL,
+      // and the admin types it in at login. discuva-admin needs this as a
+      // client-side "which tenant am I" signal for the rare public,
+      // unauthenticated route (the Games presentation screen) that has no
+      // JWT to read it from and no per-tenant subdomain of its own to
+      // resolve it from either.
+      subdomain: tenant.subdomain,
       // Same fallback EmailQueueService/PdfService already apply when a
       // tenant hasn't uploaded its own logo — without this, every
       // logo-consuming surface (favicon swap, PWA manifest icon) stayed

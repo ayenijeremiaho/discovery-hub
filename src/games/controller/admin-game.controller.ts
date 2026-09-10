@@ -82,6 +82,16 @@ export class AdminGameController {
     return this.gameService.listQuestions(id);
   }
 
+  @RequiresPermission(AdminPermission.GAMES_READ)
+  @Get(':id/sessions')
+  listSessions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: GameQueryDto,
+  ) {
+    const { page = 1, limit = 20 } = query;
+    return this.gameService.listGameSessions(id, page, limit);
+  }
+
   @RequiresPermission(AdminPermission.GAMES_WRITE)
   @Post(':id/questions')
   addQuestion(

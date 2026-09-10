@@ -1562,7 +1562,7 @@ One "run" of a `Game`. `sessionCode` is the join credential (`GAME-XXXXXX`).
 | game                       | Game                    | ManyToOne, CASCADE on delete. Indexed.                  |
 | sessionCode                | varchar, unique         |                                                          |
 | status                     | GameSessionStatusEnum   | SCHEDULED \| LIVE \| ENDED (SCHEDULED not yet reachable — sessions start directly into LIVE) |
-| hostAdmin                  | Admin \| null           | ManyToOne, SET NULL on delete — the only admin who can control the session |
+| hostAdmin                  | Admin \| null           | ManyToOne, SET NULL on delete — the only admin who can advance questions (see Games Module — ending a session is deliberately NOT host-restricted) |
 | currentQuestionIndex       | int \| null             | Null before start                                       |
 | currentQuestionStartedAt   | timestamptz \| null     | Server-side clock all participants are scored against   |
 | startedAt / endedAt        | timestamptz \| null     |                                                          |
@@ -3261,6 +3261,13 @@ here. This backend only ever knows what's been explicitly overridden.
 - `GET /tenant/info`'s response gained an `assets: Record<assetKey, imageUrl>` field — only overridden keys appear
   in it, never the full catalog and never a default. Bundled into the same call the member app already makes on
   startup rather than a second round trip.
+- `GET /tenant/info`'s response also gained a plain `subdomain: string` field — not sensitive (already visible in
+  every discuva-member URL, and the admin types it in at login), added specifically so discuva-admin has a
+  client-side "which tenant am I" signal for its Games presentation-screen fix (see Games Module): that route is
+  deliberately public/unauthenticated (so it can run unattended on a projector) and discuva-admin has no
+  per-tenant subdomain of its own to resolve tenant from the way discuva-member does (single shared host in
+  production; tenant normally comes from the JWT instead), so a public route there has nothing to identify its
+  tenant with unless it's carried explicitly.
 - `GET /tenant/assets/catalog` (`AdminGuard`, `CHURCH_PROFILE_WRITE`) — the fixed `KNOWN_ASSETS` list with
   labels/descriptions, for the admin appearance-settings page to render without duplicating the catalog
   client-side.
@@ -6628,13 +6635,27 @@ whose `status` wrongly says `DRAFT` while a session is still actually running un
 this: before resetting `Game.status` to `DRAFT`, it re-checks for any other still-`LIVE` session for the same game
 and skips the reset if one exists, so ending one orphan can't stomp on a genuinely-live sibling session.
 
-**Session lifecycle:** `GameSession.sessionCode` (`GAME-XXXXXX`, same random-alphanumeric generation as
-`ServiceSession.sessionCode`) is the join credential — no auth beyond being a logged-in member/worker is required to
-join. `startSession` sets `currentQuestionIndex = 0` and stamps `currentQuestionStartedAt`; `nextQuestion` advances
-the index and re-stamps the timestamp (400 if already on the last question — call `endSession` instead); `endSession`
-is idempotent (a second call is a no-op, not an error). `hostAdmin` is recorded at start — only that admin (or any
-admin if `hostAdmin` was somehow cleared) can control the session via `nextQuestion`/`endSession` (`ForbiddenException`
-otherwise), independent of the general `GAMES_WRITE` permission check the route itself already enforces.
+Same batch call also attaches `playCount` — a count of each game's `ENDED` sessions, grouped in one query rather
+than N+1. `Game.status` reverting to `DRAFT` after every session ends (not to some distinct "played" state) meant
+the admin list showed the identical "Draft" label for a game that had genuinely never been touched and one that had
+just been run ten times — `playCount` is what actually distinguishes those two cases in the UI (see the
+`gameStatusDisplay` note under discuva-admin below), not a change to `Game.status` itself.
+
+**Session lifecycle, with a real lobby:** `GameSession.sessionCode` (`GAME-XXXXXX`, same random-alphanumeric
+generation as `ServiceSession.sessionCode`) is the join credential — no auth beyond being a logged-in member/worker is
+required to join. `startSession` creates the session `LIVE` but with `currentQuestionIndex`/`currentQuestionStartedAt`
+both **null** — this is the lobby: members can join and see the code, but no question's timer starts until the host
+explicitly reveals Question 1. Previously `startSession` set `currentQuestionIndex = 0` and stamped the timer
+immediately, meaning Question 1's clock started the instant the button was clicked, before any member could possibly
+have joined. `nextQuestion`'s `(currentQuestionIndex ?? -1) + 1` already handled the `null → 0` transition correctly
+with no other change needed — the fix was purely in what `startSession` writes. `nextQuestion` 400s if already on
+the last question (call `endSession` instead). `hostAdmin` is recorded at start — only that admin (or any admin if
+`hostAdmin` was somehow cleared) can advance the session via `nextQuestion` (`ForbiddenException` otherwise).
+**`endSession` is deliberately NOT host-restricted** — it's the safety valve for a session whose host closed their
+tab without ending it themselves (the only way to clear a game stuck `LIVE`, since `startSession` blocks starting a
+new one while any session for the game is still live); any admin with `GAMES_WRITE` can end one, with the actual
+actor still traceable via the `GAME_SESSION_ENDED` audit log entry. `endSession` itself remains idempotent (a second
+call is a no-op, not an error).
 
 **Countdown (`GameSessionStatePayload.currentQuestionStartedAt`):** the payload carries the current question's start
 time as epoch ms alongside the existing `secondsRemaining` snapshot. `secondsRemaining` is only accurate as of the
@@ -6656,11 +6677,16 @@ aggregate.
 **Answer submission (`POST .../answer`) is a normal REST call, not a socket message** — matches this codebase's
 discipline of keeping every scored/audited action behind the guard+validation layer. It's rejected (400) if the
 session isn't `LIVE`, if the question isn't the session's *current* question (guards against a stale client
-answering a question that's already advanced past), or if the participant already answered it (also enforced at the
+answering a question that's already advanced past), if the participant already answered it (also enforced at the
 DB level via a unique constraint on `(session_id, question_id, participant_id)` — the pre-check leaves a race window
 under a concurrent double-submit, so `submitAnswer` also catches that constraint's violation (Postgres `23505`) and
-returns the same 400 rather than letting a raw DB conflict surface as a `500`); 403 if the caller never called
-`join` first.
+returns the same 400 rather than letting a raw DB conflict surface as a `500`), or **if it's past the time limit** —
+`ANSWER_GRACE_SECONDS` (2s) of slack past `question.timeLimitSeconds`, measured from `currentQuestionStartedAt`.
+Previously there was no server-side time check at all — a late answer (while the question was still current) just
+scored at the `MIN_SPEED_BONUS_FRACTION` floor rather than being rejected, so answering was silently unbounded as
+long as the host hadn't advanced yet. The grace window exists because clients count down locally from
+`currentQuestionStartedAt`, so a click registered right at 0s legitimately lands at the server a beat later on
+network/render time. 403 if the caller never called `join` first.
 
 **What participants never see:** `GameSessionStatePayload` (both the REST `GET .../state` response and the
 `session:state` socket broadcast) never includes `correctOptionIndex` — the admin presenter view, which does need to
@@ -6675,6 +6701,15 @@ different payload shapes for the same event.
 - `POST admin/games/:id/start`, `POST admin/games/sessions/:code/next-question`,
   `POST admin/games/sessions/:code/end` — `GAMES_WRITE`
 - `GET admin/games/sessions/:code/state`, `GET admin/games/sessions/:code/leaderboard` — `GAMES_READ`
+- `GET admin/games/:id/sessions?page=&limit=` — `GAMES_READ`. Past (and current, LIVE included) sessions for a
+  game — `GameSessionSummary[]`: `sessionCode`, `status`, `startedAt`, `endedAt`, `participantCount`, `topScore`,
+  `topScorerName`. The session *data* already fully persisted (`GameParticipant.totalScore`,
+  `GameResponse`'s per-answer audit trail) — this closes the actual gap, which was discoverability: no way to find
+  a session's code again once you'd navigated away from wherever it was started. `topScore`/`topScorerName` come
+  from a `DISTINCT ON (session_id)` query ordered `session_id ASC, total_score DESC, created_at ASC` — the
+  `created_at` tie-break matters, since without it Postgres's pick among equal top scores is arbitrary and "the
+  winner" would flicker between requests. Including `LIVE` sessions (not just `ENDED`) means this list doubles as
+  the "resume/end a stuck session" surface for a game whose host closed their tab without ending it.
 
 Note: `games/sessions/:code/state` on the participant controller below is `@Public()`, not `JwtAuthGuard`-gated.
 
@@ -6682,33 +6717,165 @@ Note: `games/sessions/:code/state` on the participant controller below is `@Publ
 - `POST games/sessions/:code/join`,
   `POST games/sessions/:code/questions/:questionId/answer`, `GET games/sessions/:code/leaderboard` — any
   authenticated member/worker, no department/class/role gating
+- `GET games/my-history?page=&limit=` — `MyGameHistoryEntry[]`: `sessionCode`, `gameTitle`, `playedAt`,
+  `totalScore`, `rank`, `participantCount`, `correctCount`, `answeredCount`. `ENDED` sessions only — a mid-flight
+  `LIVE` score isn't a result yet, and its rank could still change. `rank` comes from a windowed `RANK() OVER
+  (PARTITION BY session_id ORDER BY total_score DESC)` raw query (not `ROW_NUMBER()` — tied scores must share a
+  rank rather than being arbitrarily split), with the calling member's own filter applied *outside* the window;
+  filtering inside it would make the window see only that member's single row and always return rank 1.
 - `GET games/sessions/:code/state` — `@Public()` (still behind `ModuleEnabledGuard` and a `300/60s` throttle, same
   shape as `ServiceSessionController`'s public `:sessionCode/state`), so a projector/second-laptop presentation
   screen can poll it with just the join code — no member/admin login needed. Never leaks `correctOptionIndex` (see
   above), so widening this one route to unauthenticated access doesn't change what it exposes.
 
 **WebSocket:**
-- Namespace: `/game-session`, mirrors `/service-session` exactly — `joinSession({ sessionCode })` /
-  `leaveSession({ sessionCode })` client events, room `game-session:{sessionCode}`, server event `session:state`
-  carrying the full `GameSessionStatePayload`, emitted by the controller (not the service, same split as
-  `ServiceSessionController`/`ServiceSessionGateway`) after every mutating admin or participant action.
-- No authentication required to join — session code is the read credential. Answer submission itself never happens
-  over the socket (see above).
+- Namespace: `/game-session` — `joinSession({ sessionCode })` / `leaveSession({ sessionCode })` client events, room
+  `game-session:{tenantId}:{sessionCode}`, server event `session:state` carrying the full `GameSessionStatePayload`,
+  emitted by the controller (not the service, same split as `ServiceSessionController`/`ServiceSessionGateway`)
+  after every mutating admin or participant action.
+- **Bug fix: this gateway never actually worked.** `TenantMiddleware` is applied via `.forRoutes('*')`
+  (`tenant.module.ts`), which is HTTP-route-only and never runs for WebSocket messages — so `handleJoin`'s call into
+  `GameService` had no CLS tenant context, no schema resolved, and every tenant-scoped repository query silently
+  fell through to whatever the default connection resolved to (`public.game_sessions` is a dead legacy table from an
+  early migration), meaning `getSessionOrThrow` always threw and every join silently failed. Neither client noticed:
+  discuva-admin's socket hook treats `connected: true` as a signal to disable its own polling safety net, and
+  nothing listened for `session:error` — so the presenter panel and projector screen have been running on
+  re-fetch-on-action alone this whole time, never actually receiving a live push. Fixed with a real
+  `handleConnection`: resolves tenant from `client.handshake.auth.token` (a JWT, which already carries both
+  `tenantId` and `schemaName` as claims — verified against the access secret, then the refresh secret, same two-try
+  pattern as `ServiceSessionGateway.verifyTenantClaim`) for an authenticated client, or from
+  `client.handshake.auth.tenantSubdomain` via a plain public-schema `Tenant` repo lookup for the unauthenticated
+  projector screen (which has no JWT at all). The resolved `{tenantId, schemaName}` is stored on `client.data`, and
+  `handleJoin` wraps its `GameService.getSessionState` call in `runInTenantContext` (`tenant/utility/run-in-tenant-context.ts`
+  — the same helper Bull processors use to re-enter tenant context outside an HTTP request) rather than calling it
+  bare. `broadcastState` reads `tenantId` off `ClsService` directly, since it's always invoked from inside the HTTP
+  request that just performed the mutation. The room key gained a `tenantId` segment as a side effect — `sessionCode`
+  only has a per-schema unique index, not a cross-tenant one, so without it two different churches could
+  theoretically collide onto the same room.
+- No authentication required to join beyond a resolvable tenant — session code is the read credential. Answer
+  submission itself never happens over the socket (see above).
+- **`joinSession` reports its outcome via a Socket.IO acknowledgment, not a separate emitted event.** Two patches
+  were tried and superseded before landing here, both worth naming since either could resurface as a regression:
+  (1) originally, `connected` flipped `true` on the bare transport `connect` event — wrong, since `connect` fires
+  even when the follow-up join is then rejected server-side, so a client with no resolvable tenant looked
+  "connected" while never actually receiving anything. (2) Fixed by flipping `connected` only on actually
+  *receiving* a `session:state` push, with `handleJoin` emitting the state it had already fetched (to validate the
+  session exists) back to the joining client — but a session with nothing yet mutated since the join (a fresh,
+  still-empty lobby, the common case) triggers no `broadcastState` from anywhere else either, so that client got no
+  event at all: not an error, not a state push, stuck indefinitely on "Reconnecting…" despite the join having
+  actually worked. Both patches shared the same root flaw — inferring "did my join succeed" from a *separately
+  listened-for* event that may or may not correlate with this specific attempt. The real fix: `handleJoin` now
+  returns its result directly (`Promise<{ok: true, state} | {ok: false, message}>`) rather than emitting anything
+  itself; Nest's `WsAdapter` sends a handler's return value back as the argument of whichever callback the client
+  passed to its own `socket.emit('joinSession', payload, callback)` call — Socket.IO's acknowledgment mechanism,
+  built for exactly this "did this one request succeed" question. Both client hooks now read `connected` straight
+  off that ack, with no separate event to miss. `session:error` no longer exists as an emitted event at all — every
+  failure mode a client needs now arrives as `{ok: false, message}` on the same ack the success case uses.
 
 **Routes prefix:** `/admin/games`, `/games`
 
 **Admin frontend UX (`discuva-admin`):** mirrors the service-programme live-session split between a control surface
 and a screen-safe display, rather than the one page both were previously crammed into. `app/games/present/[code]`
-(`withAuth`, `games:write`) is the host's control panel — question preview, the ticking countdown, Next
-Question/End Session, leaderboard — plus a "Copy Link"/"Open Screen" action for the presentation view. That view
-lives at `app/games-screen/[code]` (outside `app/games/`, so it isn't wrapped in `app/games/layout.tsx`'s admin
-`Shell` chrome) and is unauthenticated, full-bleed, dark-themed, big-type — built to be opened on a projector or a
-second laptop via the copied link, same pattern as `/live/[code]/presentation`. Both pages tick a local
-`setInterval(() => setNowMs(Date.now()), 1000)` and derive `secondsRemaining` from `currentQuestionStartedAt` via
-`calcGameSecondsRemaining()` (`hooks/use-games.ts`) instead of rendering the payload's `secondsRemaining` snapshot
-directly, fixing a bug where the on-screen countdown only changed when a broadcast arrived instead of counting down
-every second. The games list (`app/games/page.tsx`) and detail (`app/games/[id]/page.tsx`) pages surface a "Resume
-Control"/"Resume Live Session" action off the new `activeSessionCode` field for any `LIVE_SESSION_ACTIVE` game.
+(`withAuth`, now `games:read` — was `games:write`, relaxed since this page doubles as the read-only results view for
+a past session, see below) is the host's control panel — question preview, the ticking countdown, Next Question/End
+Session, leaderboard — plus a "Copy Link"/"Open Screen" action for the presentation view. The Next Question/End
+Session controls themselves stay gated on `hasPermission("games:write")` client-side, so a read-only admin sees
+everything but can't act on it. That view lives at `app/games-screen/[code]` (outside `app/games/`, so it isn't
+wrapped in `app/games/layout.tsx`'s admin `Shell` chrome) and is unauthenticated, full-bleed, dark-themed, big-type —
+built to be opened on a projector or a second laptop via the copied link, same pattern as `/live/[code]/presentation`.
+Both pages tick a local `setInterval(() => setNowMs(Date.now()), 1000)` and derive `secondsRemaining` from
+`currentQuestionStartedAt` via `calcGameSecondsRemaining()` (`hooks/use-games.ts`) instead of rendering the payload's
+`secondsRemaining` snapshot directly, fixing a bug where the on-screen countdown only changed when a broadcast
+arrived instead of counting down every second. The games list (`app/games/page.tsx`) and detail
+(`app/games/[id]/page.tsx`) pages surface a "Resume Control"/"Resume Live Session" action off the new
+`activeSessionCode` field for any `LIVE_SESSION_ACTIVE` game — and, alongside it, an "End" action (calling the same
+now-non-host-restricted `POST .../end` endpoint) so a session left `LIVE` by a host who closed their tab without
+ending it can be cleared without needing to know its code.
+
+**Status label and a direct "Start" action on the games list (`app/games/page.tsx`).** Two related fixes:
+- `Game.status` reverting to `DRAFT` after every session ends (not to some distinct "played" state) meant a game
+  that had been run ten times and one that had never been touched both showed the identical "Draft" badge —
+  `gameStatusDisplay()` now reads the new `playCount` field alongside `isLive` to show "Draft" only for a game with
+  zero `ENDED` sessions, "Ready" for one that's been played before and is currently idle, and "Live" as before. A
+  "Played" column (`N×`, or `—` at zero) sits next to it.
+- Starting a session previously required going through the row's "Questions" link — labeled and built as the
+  question editor, with "Start Live Session" tucked into that page's header — so the only path to actually launching
+  a game read as "go edit questions" first. A "Start" button now sits directly on the list row (next to "Questions",
+  shown whenever the game isn't already live), calling `POST admin/games/:id/start` and navigating straight to the
+  control panel on success — the exact same request `app/games/[id]/page.tsx`'s own button already made, just
+  reachable without the detour. No question-count pre-check was added to gate the button — the backend's own 400
+  ("Add at least one question before starting a session") surfaces as a toast on failure instead, the same pattern
+  the adjacent "End" action already uses (which also gained toast error surfacing here, having previously failed
+  silently).
+
+**Bug fix: the presentation screen never actually loaded, for any tenant, ever.** `app/games-screen/[code]` is
+deliberately public (no login, so it can run unattended on a projector) — but every API call from discuva-admin
+flows through a shared axios client whose base URL is computed from `window.location.hostname`, and this app is a
+single shared host in production with no per-tenant subdomain of its own (tenant normally comes from the logged-in
+admin's JWT instead — see `utils/tenant/api-base-url.ts`'s own comment). A public route has no JWT and no subdomain,
+so it had no way to identify which church's session to look up — confirmed via a direct curl of the underlying
+public API endpoint, which 404s `{"message":"Tenant not found"}` without a tenant header and returns full data with
+one. Fixed with a dedicated axios instance (`utils/games/screen-api.ts`, `withCredentials: false`, no Authorization
+interceptor) rather than a flag on the shared client — the shared client's cookie/JWT would otherwise silently win
+over any override on the exact machine most likely to test the link (the host's own logged-in browser), per the
+backend's tenant-resolution precedence. The tenant subdomain travels as a `?t=` query param on the link
+`app/games/present/[code]` generates (now reading `subdomain` off `GET /tenant/info`, a genuinely reliable
+client-side "which tenant is this" source, rather than the pre-existing `localStorage`-remembered value from the
+login form, which the codebase's own comments already flagged as best-effort-only).
+
+**Bug fix: the socket layer these two pages both use had never actually worked** — see the WebSocket section above
+for the full history (two superseded patches before landing on Socket.IO acknowledgments). `hooks/use-game-session-socket.ts`
+now derives `connected` from the `joinSession` call's own ack callback — `socket.emit('joinSession', {sessionCode},
+(ack) => {...})` — rather than any separately listened-for event, so there's no "did I miss the event" gap to have
+regardless of whether the room is busy or completely quiet. Both pages' 30s safety poll stays gated on `!connected`
+exactly as before; it just now reflects reality correctly. `auth: { token, tenantSubdomain }` is passed on connect —
+a JWT for the authenticated control panel, the same `?t=` subdomain for the public screen (see
+`game-session.gateway.ts`'s `handleConnection`) — and re-sent automatically on every reconnect, since socket.io-client
+re-fires `connect` (and this hook re-joins) on its own after a dropped connection recovers.
+
+**A real lobby, not just "Get ready…".** Previously `GameScreenDisplay` rendered a static placeholder whenever
+`currentQuestion` was null; now that this state is actually reachable (session created, no question live yet — see
+the API-side lobby fix above) it renders a real `Lobby`: the join code in large type, a QR code (`qrcode`, already a
+dependency from Forms sharing — no new one added) pointing at the member app's join URL for the resolved tenant, and
+a live "N joined" count. The control panel's own "Question X of Y" line is suppressed during this state (it
+previously showed "Question 1 of N" while simultaneously saying "Waiting to start the first question…" directly
+below it — a real, if cosmetic, contradiction) and its Next-Question button relabels to "Begin Game" for this one
+first press, since it's a semantically different action from advancing past an already-revealed question even
+though it's the same endpoint call.
+
+**Live-joining names on the projector (`JoinedNames`, `game-screen-display.tsx`)** — a "1 joined" count alone gives
+a room no sense of who's actually there or that the screen is live at all. Every participant is tied at 0 points
+during the lobby, so `GameSessionStatePayload.leaderboard` — already computed unconditionally by `getSessionState`,
+no backend change needed — is, at that point, simply "who's joined so far," ordered by join time (the same
+`createdAt` tie-break `getLeaderboard` already applies elsewhere). Rendered as a wrapping row of name pills using
+the same `motion` (`LazyMotion` + `domAnimation` + `m`) already adopted for leaderboard reordering, plus
+`AnimatePresence` for the enter/exit transition — each pill keeps its `participantId` as its key across every
+poll/broadcast, so a new arrival pops in on its own instead of the whole list re-animating on every update. Capped
+at 24 visible names (`MAX_VISIBLE_JOINERS`) — showing the *most recent* joiners, not the earliest, so a brand new
+arrival is always visible even once a room is past the cap — with a plain "+N more" beyond that, so a genuinely
+large room doesn't turn into visual noise.
+
+**Made more prominent, to actually encourage joining, not just confirm it:** three follow-up additions, all on the
+same lobby. (1) `JoinedCount` replaced the small static "N joined" line with a large `tabular-nums` number that
+animates smoothly from its previous value to the new one on every change (`useAnimatedCount`) — a number visibly
+climbing reads as a room filling up live; a static label doesn't. (2) `useLatestJoinerHighlight` tracks whichever
+participant most recently joined and returns their id for 4 seconds (`RECENT_JOIN_HIGHLIGHT_MS`) — deliberately
+does *not* highlight anyone already present on the screen's first render (it could load after several people have
+already joined; only genuinely new arrivals after that count), comparing each update's participant-id set against
+the previous one it already recorded. (3) That highlighted pill gets a distinct amber ring/fill and briefly scales
+up (1.12×, settling back to 1× via the same spring once the highlight expires), paired with a `PartyPopper`
+"`{name}` just joined!" callout above the pill row — a real Lucide icon, not an emoji character, matching this
+codebase's convention elsewhere.
+
+Found and fixed alongside this: the socket `handleJoin` bug that left a genuinely idle lobby (exactly this screen,
+on a real fresh session) stuck on "Reconnecting…" forever — see the WebSocket section's own note on it above.
+
+**Past sessions, surfaced (`app/games/[id]/page.tsx`):** a new "Past sessions" table below the question builder,
+backed by `GET admin/games/:id/sessions` — each row (code, status, start time, participant count, top scorer) links
+to `app/games/present/[sessionCode]`, which now renders read-only for an `ENDED` session regardless of the viewer's
+write permission (see the `games:read` relax above). Closes the actual gap behind "no record of who won" — the
+per-session data already existed, there was just no way to find a past session's code again once you'd navigated
+away from wherever it was started.
 
 `GameSessionStatePayload.gameTitle` (`session.game.title`) is included so the control panel and the presentation
 screen can both display which game is running instead of just the join code — most visibly on the end-of-session
@@ -6717,12 +6884,113 @@ the game's title and a warmer "That's a wrap" framing, plus (on the control pane
 ("`{name}` takes the win with `{score}` pts!").
 
 **Member-facing player (`discuva-member` mobile, `components/layout/game-session.tsx`, `hooks/use-game-session.ts`):** this
-surface fetches the same public `GameSessionStatePayload` but polls it on its own schedule (`LIVE_POLL_MS` = 2s while
-a question is active, no socket) rather than sharing the admin/screen views' socket-driven state — it had fallen out
-of sync with the countdown fix above (rendering the raw `secondsRemaining` snapshot, only visibly updating once per
-poll) and was missing the `gameTitle`/`currentQuestionStartedAt` fields entirely. Brought in line: `calcGameSecondsRemaining()`
-(mirroring the same-named helper in `use-games.ts`) ticks a local `nowMs` every second off `currentQuestionStartedAt`,
-and the game title now renders above the question.
+surface fetches the same public `GameSessionStatePayload` but originally polled it on its own schedule (`LIVE_POLL_MS`
+= 2s while a question is active, no socket) rather than sharing the admin/screen views' socket-driven state — it had
+fallen out of sync with the countdown fix above (rendering the raw `secondsRemaining` snapshot, only visibly updating
+once per poll) and was missing the `gameTitle`/`currentQuestionStartedAt` fields entirely. Brought in line:
+`calcGameSecondsRemaining()` (mirroring the same-named helper in `use-games.ts`) ticks a local `nowMs` every second
+off `currentQuestionStartedAt`, and the game title now renders above the question.
+
+**Now on the same socket as discuva-admin, not polling alone.** This app previously had no real-time client
+precedent at all, so the 2s/5s adaptive poll above was a deliberate choice at the time. Once the gateway's
+tenant-context bug was fixed (see the Games Module WebSocket section above) and discuva-admin's socket hook actually
+started working, that reasoning no longer held — `hooks/use-game-session-socket.ts` is ported over (new
+`socket.io-client` dependency, none existed here before), and `useGameSession` now applies `session:state` pushes
+directly via the socket, falling back to the same 30s safety-net poll discuva-admin's control panel/presentation
+screen already use (`enabled: !connected`) rather than the original always-on fast poll — connecting with the
+member's own JWT (`tokenStore.get()?.accessToken`), which already carries `schemaName`, so no subdomain path is
+needed here the way the public admin projector screen requires.
+
+**Bug fix: a failed answer submission locked the member into "answered" forever, with no explanation.**
+`QuestionCard.handleAnswer` set its local "selected" state the instant a button was tapped, before the request even
+resolved — so a rejected submission (already answered, the question advanced underneath it, or now, past the new
+server-side time limit) left the UI permanently stuck on "Answer submitted — waiting for the host…", and
+`useSubmitAnswer`'s own `error` state, though correctly populated, was never even read by the component. Fixed by
+splitting a `pendingIndex` (set optimistically, cleared on failure) from a `submittedIndex` (set only once the
+server actually confirms it) — only the latter drives the "answered" lock, and `error` is now rendered so a failure
+is visible and, for a retriable cause, doesn't leave the buttons dead. Option buttons also now disable once
+`secondsRemaining` hits 0, pre-empting the new server-side time-limit rejection rather than trading one confusing
+failure for another. Regression-tested in `components/layout/__tests__/game-session.test.tsx`.
+
+**A real lobby here too.** The "Waiting for the host to start the first question…" state was already correctly
+rendered before this session's fixes — it just wasn't reachable, since `startSession` used to begin Question 1
+immediately. Now that it is, it got real treatment instead of staying a placeholder: a pulsing icon, "You're in!",
+and a live participant count.
+
+**Standings are never shown to a member while the game is still LIVE — only once it ends.** A compact live
+leaderboard used to render under every question and in the lobby itself, updating as scores came in — which gave
+away the whole competitive outcome well before the game actually finished, with no suspense to the reveal at all.
+Removed entirely from every `LIVE` state (lobby included); `Game Over!`'s full `LeaderboardList` remains the *only*
+place a member ever sees where they landed. `LeaderboardList`'s now-unused `compact` prop (only ever passed by the
+removed call site) was removed along with it, rather than left as dead flexibility.
+
+**Leaving mid-game now needs confirming.** Checked directly and confirmed there was no guard at all — the header's
+back button navigated away instantly, and neither the device/browser back gesture nor closing the tab were
+intercepted in any way. Guarded whenever `status === 'LIVE'` (lobby or mid-question — `ENDED` has nothing left worth
+guarding), via three mechanisms: the in-app back button, a `beforeunload` listener prompting the browser's own
+native dialog on a tab close/refresh, and a `popstate` listener for the device/browser back gesture specifically —
+a sentinel history entry (`window.history.pushState({gameGuard: true}, "")`) is pushed the moment the game becomes
+active and re-pushed *immediately* on every `popstate` (synchronously canceling the actual navigation, independent
+of what's decided next — the browser would already be gone before there was anything left to ask, otherwise).
+
+**Not `window.confirm()`, on reflection — a real in-app modal instead**, matching this codebase's own precedent
+(`plan-gate-modal.tsx`, this app's one other confirmation dialog) rather than the first pass at this fix, which did
+reach for `window.confirm()`. A native confirm dialog can't be styled or branded, only offers generic OK/Cancel
+button labels instead of something like "Leave Game"/"Stay", and looks especially out of place in an installed PWA
+with no browser chrome around it to visually anchor it. The back button and the `popstate` handler both now just
+call `setShowLeaveConfirm(true)` instead of blocking synchronously on `window.confirm()` — the modal's own
+"Stay"/"Leave Game" buttons drive the actual decision asynchronously.
+
+**Extracted into a shared `ConfirmModal` (`components/ui/confirm-modal.tsx`)**, reusing the same
+backdrop/card pattern `PlanGateModal` established (`fixed inset-0 z-[60]` backdrop + `bg-white rounded-2xl` card),
+rather than leaving the pattern inlined once per call site (it started as a local `LeaveGameConfirm` function in
+`game-session.tsx`, now removed in favor of the shared component). Takes `title`/`message`/`confirmLabel`/
+`cancelLabel`/`onConfirm`/`onCancel`, plus a `variant`: `"destructive"` renders a red confirm button for an action
+that actually changes or ends something, `"default"` a plain dark one. Applied to every remaining
+`window.confirm()` call site in this app — there were two: `game-session.tsx`'s leave-game guard (above), and
+`front-desk-session.tsx`'s "End this service?" (`handleEnd` used to block synchronously on
+`window.confirm("End this service? This can't be undone.")`; now `showEndConfirm` state opens the modal, and the
+actual `end(sessionCode)` call moved into a `handleConfirmEnd` fired only from the modal's "End Service" button).
+
+**Game history (`GET games/my-history`, `app/games/history/page.tsx`, `components/layout/games-history.tsx`,
+`hooks/use-game-session.ts`'s `useMyGameHistory`):** the first member-facing surface for "did I win," following the
+same page/component split `app/service-history/page.tsx` → `components/layout/service-history.tsx` already
+establishes — a card per past session (title, date, score, rank, correct/answered count), linked from the join
+screen (`components/layout/games-join.tsx`).
+
+**Engagement polish, both frontends:** evaluated against the five effects wanted (question transitions, timer
+urgency, correct/incorrect reveal, score count-up, a game-over celebration) plus live leaderboard reordering, and
+landed on `motion` for exactly one of them — reordering — with everything else staying plain CSS:
+
+- **Leaderboard reordering (`motion` v12, new dependency in both repos)**: rows sliding to their new rank as scores
+  change is a real FLIP animation, genuinely painful to hand-roll from raw DOM rects, and the one effect in this
+  pass that earns a library. Imported via `LazyMotion` + `domAnimation` + the lightweight `m` component (not the
+  full `motion` component) to keep the bundle cost down (~15 KB gz vs ~35 KB) — nothing here needs gestures or
+  drag. `discuva-member`'s `LeaderboardList` (`components/layout/game-session.tsx`) wraps each row in
+  `<m.div layout>`, keyed by `participantId`. `discuva-admin`'s present-page leaderboard was a `<table>`/`<tr>`
+  structure — `layout` animation doesn't play well with the browser's own table layout algorithm, so it was
+  converted to a plain flex-row `<div>` list first (same visual spacing, now genuinely animatable). `motion`
+  respects `prefers-reduced-motion` automatically; nothing extra was needed there.
+- **Question transitions (CSS only, free)**: `QuestionCard` already remounts per question (`key={question.id}`
+  at the call site), so an `animate-fade-in-up` class (reusing a keyframe that already existed in
+  `app/globals.css` but was unused) is the entire enter animation — no library, no manual reset logic.
+- **Timer urgency (CSS only)**: a new `animate-timer-urgent` keyframe (a scale pulse, distinct from the existing
+  red color-change threshold) applied at ≤5s remaining, in both the member countdown and the projector screen's
+  giant one (`game-screen-display.tsx`).
+- **Correct/incorrect reveal (CSS only)**: `animate-answer-correct` (a small pop) / `animate-answer-incorrect`
+  (a shake) on the selected option button the instant a result arrives, member-side only — the admin/projector
+  views never show which option a specific member picked.
+- **Score count-up (CSS-adjacent, no library)**: a ~25-line `useCountUp` hook (`game-session.tsx`) animates 0 →
+  the awarded points over ~500ms via `requestAnimationFrame` instead of the number just appearing, resetting via a
+  deferred rAF callback (not a synchronous `setState` in the effect body — this codebase's own `react-hooks/set-state-in-effect`
+  lint rule catches that pattern) whenever a fresh question arrives.
+- **Game-over celebration (`canvas-confetti`, new dependency in both repos, ~2.5 KB gz, no React coupling)**:
+  fires once (a `useRef` guard, since the ENDED state can re-render repeatedly from the safety poll/socket without
+  actually re-firing) on the member's "Game Over!" screen and the projector's `FinalResults` — the latter matters
+  most, since it's the one screen a whole room is actually watching together. Both skip it entirely under
+  `prefers-reduced-motion`, checked via `window.matchMedia`.
+- **`prefers-reduced-motion` reset**: discuva-admin's `app/globals.css` had no such block at all before this —
+  added the same wildcard `animation-duration`/`transition-duration` override discuva-member's already had.
 
 **Admin question-builder (`app/games/[id]/page.tsx`, `QuestionForm.removeOption`):** deleting the option currently
 marked correct used to silently reassign "correct" to whichever option shifted into that slot instead of clearing
@@ -7413,8 +7681,8 @@ outside the requested `?months=` window).
 | GET    | /integrations/youtube/callback                             | No guard — WebSub verification handshake                      | Echoes `hub.challenge` for subscribe/unsubscribe modes; 404 otherwise. Called by Google's PubSubHubbub hub, not a client. |
 | POST   | /integrations/youtube/callback                             | No guard — WebSub notification                                | Receives the "video published" Atom feed ping; always 204. Triggers YouTube Data API check + auto-announcement if actually live. Called by the hub, not a client. |
 | POST   | /admin/games                                               | AdminGuard (GAMES_WRITE)                                       | Create a game (DRAFT)                                                                                          |
-| GET    | /admin/games?page=&limit=                                  | AdminGuard (GAMES_READ)                                        | Paginated list, newest first. Each game carries `activeSessionCode` (non-null only while `LIVE_SESSION_ACTIVE`)  |
-| GET    | /admin/games/:id                                           | AdminGuard (GAMES_READ)                                        | Get a single game, with `activeSessionCode`                                                                     |
+| GET    | /admin/games?page=&limit=                                  | AdminGuard (GAMES_READ)                                        | Paginated list, newest first. Each game carries `activeSessionCode` (non-null only while `LIVE_SESSION_ACTIVE`) and `playCount` (count of its ENDED sessions) |
+| GET    | /admin/games/:id                                           | AdminGuard (GAMES_READ)                                        | Get a single game, with `activeSessionCode` and `playCount`                                                     |
 | PATCH  | /admin/games/:id                                           | AdminGuard (GAMES_WRITE)                                       | Update title/description/department/churchClass                                                               |
 | DELETE | /admin/games/:id                                           | AdminGuard (GAMES_WRITE)                                       | Delete a game (cascades questions/sessions/participants/responses)                                             |
 | GET    | /admin/games/:id/questions                                 | AdminGuard (GAMES_READ)                                        | List a game's questions, ordered                                                                               |
@@ -7422,15 +7690,17 @@ outside the requested `?months=` window).
 | PUT    | /admin/games/:id/questions/reorder                         | AdminGuard (GAMES_WRITE)                                       | Reorder — body: `{ questionIds: string[] }`, must contain exactly the game's current question ids              |
 | PATCH  | /admin/games/questions/:questionId                         | AdminGuard (GAMES_WRITE)                                       | Update a question (any field)                                                                                  |
 | DELETE | /admin/games/questions/:questionId                         | AdminGuard (GAMES_WRITE)                                       | Delete a question                                                                                              |
-| POST   | /admin/games/:id/start                                     | AdminGuard (GAMES_WRITE)                                       | Start a live session — 400 if the game has no questions or a LIVE session already exists for it. Caller becomes the session's host. |
-| POST   | /admin/games/sessions/:code/next-question                  | AdminGuard (GAMES_WRITE)                                       | Advance to the next question — 403 if caller isn't the host, 400 if session isn't LIVE or already on the last question |
-| POST   | /admin/games/sessions/:code/end                            | AdminGuard (GAMES_WRITE)                                       | End the session (idempotent) and revert the game to DRAFT                                                       |
+| POST   | /admin/games/:id/start                                     | AdminGuard (GAMES_WRITE)                                       | Start a session into its lobby (LIVE, no current question yet) — 400 if the game has no questions or a LIVE session already exists for it. Caller becomes the session's host. |
+| POST   | /admin/games/sessions/:code/next-question                  | AdminGuard (GAMES_WRITE)                                       | Advance to the next question (from the lobby, reveals Question 1) — 403 if caller isn't the host, 400 if session isn't LIVE or already on the last question |
+| POST   | /admin/games/sessions/:code/end                            | AdminGuard (GAMES_WRITE)                                       | End the session (idempotent) and revert the game to DRAFT — any GAMES_WRITE admin, not host-restricted           |
 | GET    | /admin/games/sessions/:code/state                          | AdminGuard (GAMES_READ)                                        | Current session state (same shape broadcast over the socket, no correctOptionIndex, includes `currentQuestionStartedAt`) |
-| GET    | /admin/games/sessions/:code/leaderboard                    | AdminGuard (GAMES_READ)                                        | Live leaderboard, ordered by totalScore desc                                                                    |
+| GET    | /admin/games/sessions/:code/leaderboard                    | AdminGuard (GAMES_READ)                                        | Live leaderboard, ordered by totalScore desc, createdAt asc tie-break                                            |
+| GET    | /admin/games/:id/sessions?page=&limit=                     | AdminGuard (GAMES_READ)                                        | Past + current sessions for a game, with participantCount/topScore/topScorerName per session                    |
 | POST   | /games/sessions/:code/join                                 | JwtAuthGuard + Module: games                                   | Join a live session with its code — upserts a GameParticipant, no department/class gating                      |
 | GET    | /games/sessions/:code/state                                | Public + Module: games, throttled 300/60s                       | Current session state — same payload the socket broadcasts. Unauthenticated so the projector/screen presentation view can poll it with just the join code. |
-| POST   | /games/sessions/:code/questions/:questionId/answer         | JwtAuthGuard + Module: games                                   | Submit an answer — body: `{ selectedOptionIndex }`. 400 if not the current question or already answered; 403 if caller never joined. |
+| POST   | /games/sessions/:code/questions/:questionId/answer         | JwtAuthGuard + Module: games                                   | Submit an answer — body: `{ selectedOptionIndex }`. 400 if not the current question, already answered, or past the time limit + grace; 403 if caller never joined. |
 | GET    | /games/sessions/:code/leaderboard                          | JwtAuthGuard + Module: games                                   | Live leaderboard                                                                                                 |
+| GET    | /games/my-history?page=&limit=                             | JwtAuthGuard + Module: games                                   | Caller's own past (ENDED) sessions with score, rank, participantCount, correct/answered counts                  |
 | POST   | /service-ratings                                           | JwtAuthGuard + Module: service_ratings                        | Submit or update a rating for a service (body: `eventId`, `serviceSlotId`, `rating` 1–5, `comment?`) — upsert   |
 | GET    | /service-ratings/mine?eventId=&serviceSlotId=              | JwtAuthGuard + Module: service_ratings                        | The requesting member's own rating for a service, or null                                                       |
 | GET    | /admin/service-ratings/summary?eventId=&from=&to=          | AdminGuard (SERVICE_RATING_READ)                               | Average rating, total count, and 1–5 star distribution                                                          |

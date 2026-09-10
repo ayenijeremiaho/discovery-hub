@@ -22555,6 +22555,48 @@
             }
           ],
           "name": "Get leaderboard"
+        },
+        {
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/games/my-history?page=1&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "games",
+                "my-history"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Caller's own past (ENDED) game sessions with score, rank, and answer stats. rank comes from a windowed RANK() over every participant in that session (ties share a rank). A live/in-progress session never appears here."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"data\": [\n    {\n      \"sessionCode\": \"GAME-X7K2P9\",\n      \"gameTitle\": \"Bible Trivia Night\",\n      \"playedAt\": \"2026-07-23T10:00:00.000Z\",\n      \"totalScore\": 3800,\n      \"rank\": 2,\n      \"participantCount\": 24,\n      \"correctCount\": 8,\n      \"answeredCount\": 10\n    }\n  ],\n  \"page\": 1,\n  \"limit\": 10,\n  \"totalCount\": 1,\n  \"totalPages\": 1\n}"
+            }
+          ],
+          "name": "Get my game history"
         }
       ]
     },
@@ -22632,14 +22674,14 @@
                 }
               ]
             },
-            "description": "Paginated list, newest first. Each game carries activeSessionCode, sourced directly from any LIVE GameSession row (not gated on the game's own status field, which can drift). Requires GAMES_READ."
+            "description": "Paginated list, newest first. Each game carries activeSessionCode, sourced directly from any LIVE GameSession row (not gated on the game's own status field, which can drift), and playCount, the number of ENDED sessions. Requires GAMES_READ."
           },
           "response": [
             {
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"data\": [\n    {\n      \"id\": \"g1a2b3c4-d5e6-f7a8-9012-abcdef345678\",\n      \"title\": \"Bible Trivia Night\",\n      \"description\": \"Fun trivia covering the book of Genesis\",\n      \"status\": \"LIVE_SESSION_ACTIVE\",\n      \"department\": null,\n      \"churchClass\": null,\n      \"activeSessionCode\": \"GAME-X7K2P9\",\n      \"createdAt\": \"2026-07-23T10:00:00.000Z\",\n      \"updatedAt\": \"2026-07-23T10:00:00.000Z\"\n    }\n  ],\n  \"page\": 1,\n  \"limit\": 20,\n  \"totalCount\": 1,\n  \"totalPages\": 1\n}"
+              "body": "{\n  \"data\": [\n    {\n      \"id\": \"g1a2b3c4-d5e6-f7a8-9012-abcdef345678\",\n      \"title\": \"Bible Trivia Night\",\n      \"description\": \"Fun trivia covering the book of Genesis\",\n      \"status\": \"LIVE_SESSION_ACTIVE\",\n      \"department\": null,\n      \"churchClass\": null,\n      \"activeSessionCode\": \"GAME-X7K2P9\",\n      \"createdAt\": \"2026-07-23T10:00:00.000Z\",\n      \"updatedAt\": \"2026-07-23T10:00:00.000Z\",\n      \"playCount\": 12\n    }\n  ],\n  \"page\": 1,\n  \"limit\": 20,\n  \"totalCount\": 1,\n  \"totalPages\": 1\n}"
             }
           ],
           "name": "List games"
@@ -22672,17 +22714,67 @@
                 }
               ]
             },
-            "description": "Get a single game, with activeSessionCode. Requires GAMES_READ."
+            "description": "Get a single game, with activeSessionCode and playCount. Requires GAMES_READ."
           },
           "response": [
             {
               "name": "200 OK",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"id\": \"g1a2b3c4-d5e6-f7a8-9012-abcdef345678\",\n  \"title\": \"Bible Trivia Night\",\n  \"description\": \"Fun trivia covering the book of Genesis\",\n  \"status\": \"DRAFT\",\n  \"department\": null,\n  \"churchClass\": null,\n  \"activeSessionCode\": null,\n  \"createdAt\": \"2026-07-23T10:00:00.000Z\",\n  \"updatedAt\": \"2026-07-23T10:00:00.000Z\"\n}"
+              "body": "{\n  \"id\": \"g1a2b3c4-d5e6-f7a8-9012-abcdef345678\",\n  \"title\": \"Bible Trivia Night\",\n  \"description\": \"Fun trivia covering the book of Genesis\",\n  \"status\": \"DRAFT\",\n  \"department\": null,\n  \"churchClass\": null,\n  \"activeSessionCode\": null,\n  \"createdAt\": \"2026-07-23T10:00:00.000Z\",\n  \"updatedAt\": \"2026-07-23T10:00:00.000Z\",\n  \"playCount\": 0\n}"
             }
           ],
           "name": "Get game"
+        },
+        {
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/admin/games/:id/sessions?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "games",
+                ":id",
+                "sessions"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "g1a2b3c4-d5e6-f7a8-9012-abcdef345678"
+                }
+              ]
+            },
+            "description": "Past (and current, LIVE included) sessions for a game, newest first. participantCount/topScore/topScorerName are aggregated from GameParticipant per session. Requires GAMES_READ."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"data\": [\n    {\n      \"sessionCode\": \"GAME-X7K2P9\",\n      \"status\": \"ENDED\",\n      \"startedAt\": \"2026-07-23T10:00:00.000Z\",\n      \"endedAt\": \"2026-07-23T10:12:00.000Z\",\n      \"participantCount\": 24,\n      \"topScore\": 4200,\n      \"topScorerName\": \"Ada Lovelace\"\n    }\n  ],\n  \"page\": 1,\n  \"limit\": 20,\n  \"totalCount\": 1,\n  \"totalPages\": 1\n}"
+            }
+          ],
+          "name": "List sessions for a game"
         },
         {
           "request": {

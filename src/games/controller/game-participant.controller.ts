@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../../auth/guard/jwt-auth.guard';
 import { Public } from '../../auth/decorator/public.decorator';
@@ -11,7 +19,7 @@ import { RequiresPlan } from '../../billing/decorator/requires-plan.decorator';
 import { PlanFeature } from '../../billing/enum/plan-feature.enum';
 import { GameService } from '../service/game.service';
 import { GameSessionGateway } from '../gateway/game-session.gateway';
-import { SubmitAnswerDto } from '../dto/game.dto';
+import { GameQueryDto, SubmitAnswerDto } from '../dto/game.dto';
 
 // Open to any authenticated member/worker with the join code — no
 // department/class access-control check by product decision. A game's
@@ -66,5 +74,11 @@ export class GameParticipantController {
   @Get('sessions/:code/leaderboard')
   getLeaderboard(@Param('code') code: string) {
     return this.gameService.getLeaderboard(code);
+  }
+
+  @Get('my-history')
+  getMyHistory(@Query() query: GameQueryDto, @CurrentUser() user: MemberAuth) {
+    const { page = 1, limit = 10 } = query;
+    return this.gameService.getMyGameHistory(user.id, page, limit);
   }
 }

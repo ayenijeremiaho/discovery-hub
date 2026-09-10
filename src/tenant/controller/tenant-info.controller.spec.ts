@@ -47,6 +47,7 @@ const mockConfigService = {
 const baseTenant = {
   id: 'tenant-1',
   name: 'Test Church',
+  subdomain: 'test-church',
   logoUrl: null,
   logoPublicId: null,
   tagline: null,
@@ -97,6 +98,7 @@ describe('TenantInfoController', () => {
 
       expect(result).toEqual({
         name: 'Test Church',
+        subdomain: 'test-church',
         logoUrl: 'https://cdn.example.com/platform-default-logo.png',
         tagline: null,
         address: null,
