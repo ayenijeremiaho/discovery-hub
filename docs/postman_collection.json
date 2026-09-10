@@ -23198,7 +23198,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/v1/admin/games?page=1&limit=20",
+              "raw": "{{baseUrl}}/v1/admin/games?page=1&limit=20&search=&status=",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -23215,6 +23215,16 @@
                 {
                   "key": "limit",
                   "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Case-insensitive match on title or description"
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "Filter by GameStatusEnum (DRAFT | LIVE_SESSION_ACTIVE | ARCHIVED)"
                 }
               ]
             },
@@ -24172,7 +24182,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/admin/volunteer-opportunities?page=1&limit=20",
+              "raw": "{{baseUrl}}/admin/volunteer-opportunities?page=1&limit=20&search=&status=",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -24188,6 +24198,16 @@
                 {
                   "key": "limit",
                   "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Case-insensitive match on title or description"
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "Filter by VolunteerOpportunityStatusEnum (OPEN | CLOSED | CANCELLED)"
                 }
               ]
             }
@@ -24497,7 +24517,7 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/admin/small-groups?page=1&limit=20",
+              "raw": "{{baseUrl}}/admin/small-groups?page=1&limit=20&search=&meetingFormat=",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -24513,6 +24533,16 @@
                 {
                   "key": "limit",
                   "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Case-insensitive match on name or description"
+                },
+                {
+                  "key": "meetingFormat",
+                  "value": "",
+                  "description": "Filter by MeetingFormatEnum (IN_PERSON | ONLINE)"
                 }
               ]
             }

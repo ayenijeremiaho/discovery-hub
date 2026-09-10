@@ -105,17 +105,33 @@ export class VolunteerService {
   async listOpportunities(
     page = 1,
     limit = 20,
+    search?: string,
+    status?: VolunteerOpportunityStatusEnum,
   ): Promise<PaginationResponseDto<VolunteerOpportunity>> {
     if (page < 1) throw new BadRequestException('Page must be greater than 0');
 
-    const [data, total] = await this.opportunityRepo
+    const qb = this.opportunityRepo
       .createQueryBuilder('o')
       .leftJoinAndSelect('o.department', 'department')
       .leftJoinAndSelect('o.createdBy', 'createdBy')
       .orderBy('o.date', 'DESC')
       .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+      .take(limit);
+
+    // Search/filter run server-side, not client-side over whatever page
+    // happens to be loaded — this list is genuinely paginated (unlike
+    // Forms/Pages' full unpaginated fetch), so filtering only the current
+    // page in memory would silently miss matches on every other page.
+    if (search?.trim()) {
+      qb.andWhere('(o.title ILIKE :search OR o.description ILIKE :search)', {
+        search: `%${search.trim()}%`,
+      });
+    }
+    if (status) {
+      qb.andWhere('o.status = :status', { status });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
 
     return UtilityService.createPaginationResponse(data, page, limit, total);
   }

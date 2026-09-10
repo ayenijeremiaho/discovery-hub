@@ -351,5 +351,33 @@ describe('VolunteerService', () => {
       expect(result.totalCount).toBe(1);
       expect(qb.orderBy).toHaveBeenCalledWith('o.date', 'DESC');
     });
+
+    it('applies a title/description search filter via ILIKE', async () => {
+      const qb = makeQb();
+      mockOpportunityRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.listOpportunities(1, 20, 'food drive');
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        '(o.title ILIKE :search OR o.description ILIKE :search)',
+        { search: '%food drive%' },
+      );
+    });
+
+    it('applies a status filter', async () => {
+      const qb = makeQb();
+      mockOpportunityRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.listOpportunities(
+        1,
+        20,
+        undefined,
+        VolunteerOpportunityStatusEnum.OPEN,
+      );
+
+      expect(qb.andWhere).toHaveBeenCalledWith('o.status = :status', {
+        status: VolunteerOpportunityStatusEnum.OPEN,
+      });
+    });
   });
 });

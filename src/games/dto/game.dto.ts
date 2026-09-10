@@ -1,6 +1,7 @@
 import {
   ArrayMinSize,
   IsArray,
+  IsEnum,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -10,6 +11,7 @@ import {
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { GameStatusEnum } from '../enum/game-status.enum';
 
 export class CreateGameDto {
   @IsString()
@@ -59,6 +61,14 @@ export class GameQueryDto {
   @IsInt()
   @Min(1)
   limit?: number = 20;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsEnum(GameStatusEnum)
+  status?: GameStatusEnum;
 }
 
 export class CreateGameQuestionDto {

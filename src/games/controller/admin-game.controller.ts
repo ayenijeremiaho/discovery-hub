@@ -50,8 +50,8 @@ export class AdminGameController {
   @RequiresPermission(AdminPermission.GAMES_READ)
   @Get()
   findAll(@Query() query: GameQueryDto) {
-    const { page = 1, limit = 20 } = query;
-    return this.gameService.listGames(page, limit);
+    const { page = 1, limit = 20, search, status } = query;
+    return this.gameService.listGames(page, limit, search, status);
   }
 
   @RequiresPermission(AdminPermission.GAMES_READ)

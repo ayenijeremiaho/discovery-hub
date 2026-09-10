@@ -99,17 +99,35 @@ export class SmallGroupService {
     });
   }
 
-  async list(page = 1, limit = 20): Promise<PaginationResponseDto<SmallGroup>> {
+  async list(
+    page = 1,
+    limit = 20,
+    search?: string,
+    meetingFormat?: MeetingFormatEnum,
+  ): Promise<PaginationResponseDto<SmallGroup>> {
     if (page < 1) throw new BadRequestException('Page must be greater than 0');
 
-    const [data, total] = await this.groupRepo
+    const qb = this.groupRepo
       .createQueryBuilder('g')
       .leftJoinAndSelect('g.leader', 'leader')
       .leftJoinAndSelect('g.venue', 'venue')
       .orderBy('g.name', 'ASC')
       .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+      .take(limit);
+
+    // Server-side, not client-side over the loaded page — this list is
+    // genuinely paginated, so filtering only what's in memory would
+    // silently miss matches on other pages.
+    if (search?.trim()) {
+      qb.andWhere('(g.name ILIKE :search OR g.description ILIKE :search)', {
+        search: `%${search.trim()}%`,
+      });
+    }
+    if (meetingFormat) {
+      qb.andWhere('g.meeting_format = :meetingFormat', { meetingFormat });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
 
     return UtilityService.createPaginationResponse(data, page, limit, total);
   }

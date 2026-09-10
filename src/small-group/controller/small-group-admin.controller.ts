@@ -20,6 +20,7 @@ import {
   CreateSmallGroupDto,
   UpdateSmallGroupDto,
 } from '../dto/small-group.dto';
+import { MeetingFormatEnum } from '../../utility/enum/meeting-format.enum';
 
 @Controller('admin/small-groups')
 @UseGuards(AdminGuard)
@@ -34,8 +35,18 @@ export class SmallGroupAdminController {
 
   @Get()
   @RequiresPermission(AdminPermission.SMALL_GROUP_READ)
-  list(@Query('page') page?: string, @Query('limit') limit?: string) {
-    return this.smallGroupService.list(page ? +page : 1, limit ? +limit : 20);
+  list(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('meetingFormat') meetingFormat?: MeetingFormatEnum,
+  ) {
+    return this.smallGroupService.list(
+      page ? +page : 1,
+      limit ? +limit : 20,
+      search,
+      meetingFormat,
+    );
   }
 
   @Get(':id')

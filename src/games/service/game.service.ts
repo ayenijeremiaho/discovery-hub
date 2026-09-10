@@ -192,13 +192,28 @@ export class GameService {
   async listGames(
     page = 1,
     limit = 20,
+    search?: string,
+    status?: GameStatusEnum,
   ): Promise<PaginationResponseDto<GameListItem>> {
-    const [games, total] = await this.gameRepo.findAndCount({
-      relations: ['department', 'churchClass'],
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    const qb = this.gameRepo
+      .createQueryBuilder('game')
+      .leftJoinAndSelect('game.department', 'department')
+      .leftJoinAndSelect('game.churchClass', 'churchClass')
+      .orderBy('game.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    if (search?.trim()) {
+      qb.andWhere(
+        '(game.title ILIKE :search OR game.description ILIKE :search)',
+        { search: `%${search.trim()}%` },
+      );
+    }
+    if (status) {
+      qb.andWhere('game.status = :status', { status });
+    }
+
+    const [games, total] = await qb.getManyAndCount();
     const enriched = await this.attachActiveSessionCodes(games);
     return UtilityService.createPaginationResponse(
       enriched,

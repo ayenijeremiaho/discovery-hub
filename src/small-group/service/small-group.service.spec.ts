@@ -10,6 +10,7 @@ import { SmallGroup } from '../entity/small-group.entity';
 import { SmallGroupMember } from '../entity/small-group-member.entity';
 import { SmallGroupAttendance } from '../entity/small-group-attendance.entity';
 import { SmallGroupAttendanceStatusEnum } from '../enum/small-group-attendance-status.enum';
+import { MeetingFormatEnum } from '../../utility/enum/meeting-format.enum';
 import { AuditLogService } from '../../utility/service/audit-log.service';
 
 const mockGroupRepo = {
@@ -222,6 +223,7 @@ describe('SmallGroupService', () => {
     it('joins the venue relation alongside leader', async () => {
       const qb: any = {
         leftJoinAndSelect: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
@@ -233,6 +235,46 @@ describe('SmallGroupService', () => {
 
       expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('g.leader', 'leader');
       expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('g.venue', 'venue');
+    });
+
+    it('applies a name/description search filter via ILIKE', async () => {
+      const qb: any = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      mockGroupRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.list(1, 20, 'youth');
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        '(g.name ILIKE :search OR g.description ILIKE :search)',
+        { search: '%youth%' },
+      );
+    });
+
+    it('applies a meeting format filter', async () => {
+      const qb: any = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      mockGroupRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.list(1, 20, undefined, MeetingFormatEnum.ONLINE);
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'g.meeting_format = :meetingFormat',
+        {
+          meetingFormat: MeetingFormatEnum.ONLINE,
+        },
+      );
     });
   });
 

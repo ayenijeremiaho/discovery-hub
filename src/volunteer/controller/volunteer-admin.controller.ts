@@ -24,6 +24,7 @@ import {
   CreateVolunteerOpportunityDto,
   UpdateVolunteerOpportunityDto,
 } from '../dto/volunteer-opportunity.dto';
+import { VolunteerOpportunityStatusEnum } from '../enum/volunteer-opportunity-status.enum';
 
 @RequiresModule('volunteering')
 @RequiresPlan(PlanFeature.VOLUNTEER)
@@ -43,10 +44,17 @@ export class VolunteerAdminController {
 
   @Get()
   @RequiresPermission(AdminPermission.VOLUNTEER_READ)
-  list(@Query('page') page?: string, @Query('limit') limit?: string) {
+  list(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: VolunteerOpportunityStatusEnum,
+  ) {
     return this.volunteerService.listOpportunities(
       page ? +page : 1,
       limit ? +limit : 20,
+      search,
+      status,
     );
   }
 

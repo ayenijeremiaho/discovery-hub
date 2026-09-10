@@ -21,6 +21,7 @@ const mockGameRepo = {
   remove: jest.fn(),
   findOne: jest.fn(),
   findAndCount: jest.fn(),
+  createQueryBuilder: jest.fn(),
 };
 
 const mockQuestionRepo = {
@@ -76,6 +77,7 @@ function makeQueryBuilderMock() {
     addSelect: jest.fn(() => builder),
     innerJoin: jest.fn(() => builder),
     innerJoinAndSelect: jest.fn(() => builder),
+    leftJoinAndSelect: jest.fn(() => builder),
     where: jest.fn(() => builder),
     andWhere: jest.fn(() => builder),
     groupBy: jest.fn(() => builder),
@@ -756,7 +758,9 @@ describe('GameService', () => {
         status: GameStatusEnum.LIVE_SESSION_ACTIVE,
       };
       const draftGame = { id: 'game-2', status: GameStatusEnum.DRAFT };
-      mockGameRepo.findAndCount.mockResolvedValue([[liveGame, draftGame], 2]);
+      const qb = makeQueryBuilderMock();
+      qb.getManyAndCount.mockResolvedValue([[liveGame, draftGame], 2]);
+      mockGameRepo.createQueryBuilder.mockReturnValue(qb);
       mockSessionRepo.find.mockResolvedValue([
         {
           sessionCode: 'GAME-LIVE01',
@@ -788,7 +792,9 @@ describe('GameService', () => {
       // before startSession's duplicate-session guard existed). This must
       // still surface the Resume action off the real GameSession row.
       const driftedGame = { id: 'game-1', status: GameStatusEnum.DRAFT };
-      mockGameRepo.findAndCount.mockResolvedValue([[driftedGame], 1]);
+      const qb = makeQueryBuilderMock();
+      qb.getManyAndCount.mockResolvedValue([[driftedGame], 1]);
+      mockGameRepo.createQueryBuilder.mockReturnValue(qb);
       mockSessionRepo.find.mockResolvedValue([
         { sessionCode: 'GAME-ORPHAN1', game: { id: 'game-1' } },
       ]);
@@ -804,10 +810,12 @@ describe('GameService', () => {
     });
 
     it('returns null activeSessionCode when no game has a live session', async () => {
-      mockGameRepo.findAndCount.mockResolvedValue([
+      const qb = makeQueryBuilderMock();
+      qb.getManyAndCount.mockResolvedValue([
         [{ id: 'game-2', status: GameStatusEnum.DRAFT }],
         1,
       ]);
+      mockGameRepo.createQueryBuilder.mockReturnValue(qb);
       mockSessionRepo.find.mockResolvedValue([]);
 
       const result = await service.listGames(1, 20);
@@ -820,10 +828,9 @@ describe('GameService', () => {
     it('attaches a play count from ENDED sessions per game, defaulting to 0', async () => {
       const playedGame = { id: 'game-1', status: GameStatusEnum.DRAFT };
       const neverPlayedGame = { id: 'game-2', status: GameStatusEnum.DRAFT };
-      mockGameRepo.findAndCount.mockResolvedValue([
-        [playedGame, neverPlayedGame],
-        2,
-      ]);
+      const qb = makeQueryBuilderMock();
+      qb.getManyAndCount.mockResolvedValue([[playedGame, neverPlayedGame], 2]);
+      mockGameRepo.createQueryBuilder.mockReturnValue(qb);
       mockSessionRepo.find.mockResolvedValue([]);
       const playCountBuilder = makeQueryBuilderMock();
       playCountBuilder.getRawMany.mockResolvedValue([
@@ -837,6 +844,31 @@ describe('GameService', () => {
         expect.objectContaining({ id: 'game-1', playCount: 3 }),
         expect.objectContaining({ id: 'game-2', playCount: 0 }),
       ]);
+    });
+
+    it('applies a title/description search filter via ILIKE', async () => {
+      const qb = makeQueryBuilderMock();
+      mockGameRepo.createQueryBuilder.mockReturnValue(qb);
+      mockSessionRepo.find.mockResolvedValue([]);
+
+      await service.listGames(1, 20, 'trivia');
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        '(game.title ILIKE :search OR game.description ILIKE :search)',
+        { search: '%trivia%' },
+      );
+    });
+
+    it('applies a status filter', async () => {
+      const qb = makeQueryBuilderMock();
+      mockGameRepo.createQueryBuilder.mockReturnValue(qb);
+      mockSessionRepo.find.mockResolvedValue([]);
+
+      await service.listGames(1, 20, undefined, GameStatusEnum.DRAFT);
+
+      expect(qb.andWhere).toHaveBeenCalledWith('game.status = :status', {
+        status: GameStatusEnum.DRAFT,
+      });
     });
   });
 
