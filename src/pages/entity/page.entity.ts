@@ -25,6 +25,11 @@ export interface PageSection {
   // field exists at all. PageAdminController's raw GET /pages/:id (the
   // builder's own read) returns it untouched, same as every other field.
   hidden?: boolean;
+  // Only meaningful when Page.showHeader is on — overrides what this
+  // section's link in the header nav says (e.g. "Home" instead of a long
+  // Hero title). Unset falls back to the section's own heading/title, same
+  // as before this field existed — see discuva-member's PageHeader.
+  navLabel?: string;
 }
 
 @Entity({ name: 'pages' })
@@ -144,4 +149,43 @@ export class Page extends BaseEntity {
 
   @Column({ name: 'draft_font_family', nullable: true })
   draftFontFamily: string | null;
+
+  // Off by default — an already-published page keeps rendering exactly as
+  // it does today unless an admin explicitly opts in. When on, discuva-
+  // member renders a sticky header (church logo/name + a link per section
+  // that has a heading) above `sections` — page-level chrome, not a
+  // section, same reasoning FOOTER's own automatic default lives outside
+  // `sections` entirely.
+  @Column({ name: 'show_header', default: false })
+  showHeader: boolean;
+
+  @Column({ name: 'draft_show_header', default: false })
+  draftShowHeader: boolean;
+
+  // Null (the common case) falls back to the church's own logoUrl
+  // (PageService.resolveChurchInfo) — set only when this specific page
+  // wants a different mark in its header than the church's default, e.g. a
+  // one-off conference/program with its own logo. Only meaningful when
+  // showHeader is true.
+  @Column({ name: 'header_logo_url', nullable: true })
+  headerLogoUrl: string | null;
+
+  @Column({ name: 'draft_header_logo_url', nullable: true })
+  draftHeaderLogoUrl: string | null;
+
+  // Custom links shown in the header alongside the automatic per-section
+  // ones (e.g. linking out to another Page, or to an external site) — a
+  // plain jsonb array, same "no per-item id to diff against, whole-array
+  // replace" convention as `sections` itself. Only meaningful when
+  // showHeader is true.
+  @Column({ name: 'header_links', type: 'jsonb', default: [] })
+  headerLinks: HeaderLink[];
+
+  @Column({ name: 'draft_header_links', type: 'jsonb', default: [] })
+  draftHeaderLinks: HeaderLink[];
+}
+
+export interface HeaderLink {
+  label: string;
+  url: string;
 }

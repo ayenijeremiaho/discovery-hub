@@ -160,6 +160,113 @@ describe('PageSectionDto.hidden', () => {
   });
 });
 
+describe('PageSectionDto.navLabel', () => {
+  function makeDto(navLabel: unknown) {
+    return plainToInstance(CreatePageDto, {
+      slug: 'conf-2026',
+      title: 'Conference 2026',
+      sections: [
+        {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          type: PageSectionType.HERO,
+          content: { title: 'Conference 2026' },
+          navLabel,
+        },
+      ],
+    });
+  }
+
+  it('accepts a string navLabel', async () => {
+    const errors = await validateDto(makeDto('Home'));
+    expect(errors).toHaveLength(0);
+  });
+
+  it('accepts an omitted navLabel', async () => {
+    const errors = await validateDto(
+      plainToInstance(CreatePageDto, {
+        slug: 'conf-2026',
+        title: 'Conference 2026',
+        sections: [
+          {
+            id: '550e8400-e29b-41d4-a716-446655440000',
+            type: PageSectionType.HERO,
+            content: { title: 'Conference 2026' },
+          },
+        ],
+      }),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects a non-string navLabel', async () => {
+    const errors = await validateDto(makeDto(42));
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('CreatePageDto.headerLinks', () => {
+  function makeDto(headerLinks: unknown) {
+    return plainToInstance(CreatePageDto, {
+      slug: 'conf-2026',
+      title: 'Conference 2026',
+      headerLinks,
+      sections: [
+        {
+          id: '550e8400-e29b-41d4-a716-446655440000',
+          type: PageSectionType.HERO,
+          content: { title: 'Conference 2026' },
+        },
+      ],
+    });
+  }
+
+  it('accepts a valid list of links', async () => {
+    const errors = await validateDto(
+      makeDto([
+        { label: 'Privacy Policy', url: 'https://example.com/privacy' },
+        { label: 'Merch', url: 'https://example.com/merch' },
+      ]),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it('accepts an omitted headerLinks', async () => {
+    const errors = await validateDto(
+      plainToInstance(CreatePageDto, {
+        slug: 'conf-2026',
+        title: 'Conference 2026',
+        sections: [
+          {
+            id: '550e8400-e29b-41d4-a716-446655440000',
+            type: PageSectionType.HERO,
+            content: { title: 'Conference 2026' },
+          },
+        ],
+      }),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects a link missing a label', async () => {
+    const errors = await validateDto(
+      makeDto([{ url: 'https://example.com/privacy' }]),
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a link missing a url', async () => {
+    const errors = await validateDto(makeDto([{ label: 'Privacy Policy' }]));
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a link with an empty label', async () => {
+    const errors = await validateDto(
+      makeDto([{ label: '', url: 'https://example.com/privacy' }]),
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
 describe('CreatePageDto.fontFamily', () => {
   function makeDto(fontFamily: unknown) {
     return plainToInstance(CreatePageDto, {

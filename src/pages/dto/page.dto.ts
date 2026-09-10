@@ -136,6 +136,28 @@ export class PageSectionDto {
   @ValidateNested()
   @Type(() => SectionStyleDto)
   style?: SectionStyleDto;
+
+  // Only meaningful when Page.showHeader is on — see PageSection.navLabel's
+  // own comment. Unvalidated beyond the string type, same posture as
+  // `hidden`.
+  @IsOptional()
+  @IsString()
+  navLabel?: string;
+}
+
+// A header's custom link — same shape as FOOTER's own content.links
+// (label, url), and deliberately just as simple: no separate "internal
+// page" vs. "external URL" distinction. An admin linking to another one of
+// the church's own Pages just pastes its full public URL, same as they
+// would any other link.
+export class HeaderLinkDto {
+  @IsString()
+  @IsNotEmpty()
+  label: string;
+
+  @IsString()
+  @IsNotEmpty()
+  url: string;
 }
 
 export class CreatePageDto {
@@ -175,6 +197,27 @@ export class CreatePageDto {
   @IsOptional()
   @IsIn(PAGE_FONTS)
   fontFamily?: PageFont | null;
+
+  // Off by default — see Page.showHeader's own comment. Page-level chrome
+  // (church logo/name + a link per section with a heading), not a section.
+  @IsOptional()
+  @IsBoolean()
+  showHeader?: boolean;
+
+  // Null/omitted falls back to the church's own logo — only set this to
+  // override with something page-specific (see Page.headerLogoUrl).
+  @IsOptional()
+  @IsString()
+  headerLogoUrl?: string | null;
+
+  // Custom links shown alongside the automatic per-section ones — see
+  // HeaderLinkDto's own comment. Whole-array replace, same convention
+  // `sections` itself uses.
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => HeaderLinkDto)
+  headerLinks?: HeaderLinkDto[];
 
   @IsArray()
   @ValidateNested({ each: true })
@@ -218,6 +261,20 @@ export class UpdatePageDto {
   @IsOptional()
   @IsIn(PAGE_FONTS)
   fontFamily?: PageFont | null;
+
+  @IsOptional()
+  @IsBoolean()
+  showHeader?: boolean;
+
+  @IsOptional()
+  @IsString()
+  headerLogoUrl?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => HeaderLinkDto)
+  headerLinks?: HeaderLinkDto[];
 
   // Omitted = leave untouched; an array = replace the whole list wholesale
   // — same convention as Form.postSubmitOutcomes on UpdateFormDto (there's
@@ -287,12 +344,22 @@ export interface PublicPageDto {
   accentColor: string | null;
   backgroundColor: string | null;
   fontFamily: string | null;
+  // See Page.showHeader's own comment — off by default, page-level chrome
+  // rendered outside `sections` entirely, same as the FOOTER default.
+  showHeader: boolean;
+  // Null falls back to church.logoUrl below — only set when this page
+  // overrides the church's default logo (Page.headerLogoUrl).
+  headerLogoUrl: string | null;
+  // Custom header links, alongside the automatic per-section ones.
+  headerLinks: { label: string; url: string }[];
   // Backs the automatic minimal footer (name + copyright) shown when a page
-  // has no FOOTER section, and a FOOTER section's own "show contact info"
-  // toggle — see PageService.resolveChurchInfo. Not admin-editable per
+  // has no FOOTER section, a FOOTER section's own "show contact info"
+  // toggle, and — new — the optional header's logo/name (see showHeader
+  // above) — see PageService.resolveChurchInfo. Not admin-editable per
   // page; always the current tenant's own info.
   church: {
     name: string;
+    logoUrl: string | null;
     address: string | null;
     supportEmail: string | null;
   };
@@ -301,5 +368,6 @@ export interface PublicPageDto {
     type: PageSectionType;
     content: Record<string, unknown>;
     style?: SectionStyle;
+    navLabel?: string;
   }[];
 }

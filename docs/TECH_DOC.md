@@ -4359,6 +4359,55 @@ to every already-published page. `HeroSection` is the one exception — its vert
 doesn't), neither of which is a flat padding value a `spacing` knob could meaningfully replace, so Hero doesn't
 carry this knob.
 
+**`SECTION_PADDING_X` — every section's own horizontal gutter (`components/pages/section-style.ts`)**: `px-6
+sm:px-8 lg:px-12`, replacing a flat `px-6` that every section used at every breakpoint. Fine on a narrow phone
+(24px), but on a ~1024px-wide tablet the same flat 24px read as almost no margin at all relative to how wide the
+content block actually is — confirmed against a real screenshot of the `yfc-2026` page, text running close enough
+to the viewport edge to look unfinished. Not exposed as a per-section `style` knob like `spacing` — there's no
+scenario where an admin would want a different gutter on one section than the rest, so this is one shared,
+unconditional constant (`SECTION_PADDING_X`) every section pulls from, not a lookup keyed by a field on
+`SectionStyle`. `HeroSection` keeps its own separate `px-4 sm:px-6` content-overlay padding (the no-image case) —
+a deliberately different, narrower value from before this fix, left untouched since it wasn't the pattern flagged.
+
+**Hero's mobile sizing, below `sm` (640px), with a background image**: `min-h-[85vh] sm:min-h-0 sm:aspect-video`,
+not a flat `aspect-video` at every width. A portrait phone viewport crops a 16:9 box down to a short, squat strip —
+confirmed against the real `yfc-2026` page next to a reference site's immersive full-screen mobile hero, on a
+430×932 viewport matched to the user's own DevTools screenshot. `sm:min-h-0` clears the min-height back out at
+`sm:` and up so the original `aspect-video` behavior takes over unopposed on tablet/desktop, unchanged. The
+no-image case (`py-6 sm:py-12 md:py-16` content overlay) is untouched — this only affects Hero sections with a
+background image set.
+
+**`backgroundImageUrlMobile` (`HeroContent.backgroundImageUrlMobile`, structurally validated the same as
+`backgroundImageUrl` in `assertValidSections`, no dedicated migration — it's a sibling key inside the existing
+jsonb `content`, not a typed column)** — an optional portrait variant of the Hero background image, used only
+below `sm`. `min-height` is driven purely by viewport height, decoupled from width, so on a tall narrow phone
+`min-h-[85vh]` pushes the box into a much taller/narrower aspect ratio than a landscape `backgroundImageUrl`
+actually has, forcing `object-cover` to crop hard off the sides. A dial-back to `min-h-[65vh]` was tried first to
+reduce the crop, and did — verified via screenshot, the title text was no longer clipped — but the user weighed in
+that logos elsewhere in the same flyer image were still being cropped out, and preferred keeping the fuller `85vh`
+immersive height with a real fix for the image itself. `backgroundImageUrlMobile` is that fix: when set,
+discuva-member renders it (`sm:hidden`) instead of `backgroundImageUrl` below `sm`, and `backgroundImageUrl`
+(`hidden sm:block`) above it — two `<Image fill priority>` elements rather than one, so mobile fetches only the
+image actually shown at that width... except both are still requested eagerly regardless of which one is visible,
+since CSS `display: none` doesn't stop the underlying `<img>` tag's own fetch the way a real `<picture>`/`<source
+media>` swap would — a deliberate simplicity tradeoff over building true conditional fetching, revisit if this
+page's LCP becomes a real concern.
+
+**First cut of `backgroundImageUrlMobile` still used `min-h-[85vh]` for its box, and still cropped.** A real
+1080×1350 (4:5) upload was still cropped ~16% off each side on a 430×932 phone — `min-h-[85vh]` (792px tall) is a
+narrower/taller box (aspect ≈0.54) than a 4:5 image (0.8) regardless of *which* image fills it, since min-height
+is a viewport measurement with no relationship to the uploaded image's own dimensions. Confirmed the fix has to be
+about the *box*, not the image: below `sm`, once `backgroundImageUrlMobile` is set, the section now sizes itself
+via `aspect-[4/5]` instead of `min-h-[85vh]` — the box's shape comes from the image's own ratio, so a correctly
+proportioned upload renders edge-to-edge with zero crop on any phone width, not just the one it happened to be
+tested against. `sm:aspect-video` still takes over unopposed at tablet/desktop. Verified against the real
+`yfc-2026` page's own uploaded 1080×1350 image at 430×932: measured section box was exactly 430×537.5 (ratio
+0.800, matching 4:5 to three decimal places) and the screenshot showed both corner logos and all text rendering
+completely uncropped. Falls back to the original `min-h-[85vh]`/single-image/`object-cover` behavior whenever
+`backgroundImageUrlMobile` is unset — no change for any page that hasn't set one. discuva-admin's Hero editor
+(`sections-editor.tsx`) states the 4:5 ratio as a requirement, not a suggestion, in its upload hint — since the
+box now takes its shape directly from it, an off-ratio upload is the one remaining way to still get cropped.
+
 Needs `@ValidateNested()`/`@Type()` specifically because the global `ValidationPipe`'s `whitelist: true`
 (`main.ts`) would otherwise silently strip a plain object literal here before validation even runs;
 `forbidNonWhitelisted: true` means an unrecognized key *inside* `style` (e.g. a typo) 400s rather than being
@@ -4443,6 +4492,14 @@ independent, private preview link. discuva-admin surfaces this as a "Duplicate P
 | `COUNTDOWN` | `heading?, targetDate, expiredMessage?` — a live days/hours/minutes/seconds count down to `targetDate`, the one section whose content carries a **real machine-readable instant** rather than free text (unlike `HERO.dateRangeText`/`SCHEDULE`'s day labels). `targetDate` must be a value `Date.parse` accepts (rejected with a 400 otherwise); discuva-admin's editor captures it via a `datetime-local` input and converts it to a full ISO instant with `new Date(local).toISOString()` at the moment it's picked, so the stored value is timezone-correct for every visitor with no backend timezone plumbing needed — see that repo's `CountdownContent` comment. Rendering (discuva-member's `CountdownTimer`) is a `"use client"` island using `useSyncExternalStore` (not `useState`+`useEffect`) to tick a 1s `setInterval` against `Date.now()`, with `getServerSnapshot` returning `null` so SSR renders nothing rather than baking in the server's clock and mismatching on hydration |
 | `FOOTER` | `heading?, text?, links?: { label, url }[], socialLinks?: { platform, url }[], showCopyright?, showContactInfo?`. `platform` ∈ `FOOTER_SOCIAL_PLATFORMS` (`'instagram' \| 'facebook' \| 'youtube' \| 'tiktok' \| 'x' \| 'website'`) — a small fixed set, not free text. `showCopyright` defaults to `true` (the church name + current year); `showContactInfo` defaults to `false` (the tenant's own `address`/`supportEmail`, never typed per page — see `church` below). See "Every page gets a footer" below for why this type is optional and how it interacts with the automatic default |
 
+**`HERO` and `FOOTER` are capped at one per page** (`PageService.assertNoDuplicateSingletonSections`, called at the
+end of `assertValidSections`) — unlike `REGISTRATION` (documented below as deliberately unrestricted, e.g. event
+registration alongside a separate merch pre-order form) or any other content-block type, where a second instance
+is a real, legitimate use, a second opening banner or a second footer doesn't represent anything — a page has
+exactly one of each, by what they *are*. Enforced in two places: discuva-admin's own "Add Section" picker grays
+the option out once one already exists (`SINGLETON_SECTION_TYPES` in `sections-editor.tsx`), and this server-side
+check is defense-in-depth for the API being hit directly (a 400, not a silent drop).
+
 **Every page gets a footer, whether or not it has a `FOOTER` section** — a direct feature request ("can we introduce
 a footer?"). `PublicPageDto`/the preview DTO both gained a `church: { name, address, supportEmail }` field
 (`PageService.resolveChurchInfo`), the current tenant's own info resolved via `ClsService<AppClsStore>` +
@@ -4481,6 +4538,113 @@ same `effectiveAccentColor` fallback every other section uses) becomes the badge
 color for contrast; with no accent set, a theme-appropriate neutral fill (`bg-white/10` under Bold, `bg-[#121212]/5`
 under Minimal) is used instead. Each link keeps `aria-label`/`title` set to the platform's full name (e.g. "X
 (Twitter)") for accessibility, since the visible content is now icon-only.
+
+**Optional page header (`Page.showHeader`/`headerLogoUrl`)** — off by default, page-level chrome like `theme`/
+`accentColor` (draft/live split via `AddPageShowHeader`, a single migration covering both new columns plus
+`header_logo_url`/`draft_header_logo_url` since none had shipped yet). When on, discuva-member renders a fixed
+bar above every page: the church's own logo (`PublicPageDto.church.logoUrl`, now added to `resolveChurchInfo` —
+falls back to the `LOGO_URL` env default the same way `TenantInfoController.toProfile()` already does) or, once
+overridden per-page via `headerLogoUrl` (e.g. a conference with its own mark distinct from the church's), that
+instead — with the church's own name as a text fallback when no logo exists at all. Beside it, one link per
+section that already has a `heading` (or `title`, for `HERO`) set: no new content field on any section type,
+purely a reuse of what's already there. `STATS` has no heading field at all, so it never gets a link; `FOOTER` is
+excluded outright (it's page chrome, not something to jump to).
+
+**Active-section highlighting, via `IntersectionObserver`, not a scroll listener** — `PageHeader`
+(`components/pages/page-header.tsx`) watches every linked section's own DOM node (already rendered with
+`id={section.id}`) through a thin activation band starting just below the fixed bar
+(`rootMargin: "-${barHeight}px 0px -70% 0px"`); whichever section is inside that band gets its nav link
+highlighted (the page's `accentColor` when set, a plain strong theme color otherwise). Clicking a link intercepts
+the default anchor jump and does its own offset `scrollTo`, since a plain `href="#id"` jump has no way to know
+about the fixed bar's height sitting on top of the target — the plain anchor still works with JS disabled, just
+without the offset compensation.
+
+**`position: fixed`, deliberately not `sticky`** — this app's `globals.css` sets `html`/`body` to
+`overflow-y: auto` everywhere, for the authenticated app shell's hidden-scrollbar look. Having `overflow: auto` on
+*both* of them breaks `position: sticky` on any descendant, even though neither element ever actually scrolls
+independently (`body`'s own height already matches its content — the real scrolling happens one level up at
+`html`, which is what makes `body`'s `overflow: auto` still count as *a* scroll container and break sticky's
+containing block). Two attempted fixes for this specific route didn't work and aren't worth repeating: a plain
+`<style>` override loses to Next.js's own managed stylesheet precedence (its `data-precedence` attribute controls
+cascade order independent of DOM position, not source order — confirmed directly, it silently had no effect), and
+even an *imperative* inline-style override (`element.style.overflowY = "visible"`, which should out-rank any
+non-`!important` stylesheet rule) was still overridden — unexplained, and not worth chasing further given `fixed`
+sidesteps the entire question. `position: fixed` is relative to the viewport, unaffected by any ancestor's
+`overflow`. The unpublished-draft preview banner renders as part of the *same* fixed block when a page has a
+header (stacked above the nav bar in normal flow, inside the fixed container) rather than as its own separate
+sticky element — letting two fixed-position concerns coexist without hand-computing either one's own top offset.
+A `ResizeObserver`-measured spacer element right after the fixed block reserves the exact real space so page
+content is never hidden underneath, self-adjusting live if the banner wraps to two lines on a narrow screen.
+
+**Four follow-up fixes from live use of the first version, all in `PageHeader`/`Page.headerLinks`:**
+- **Logo bigger and given more room** — `h-8` (32px) → `h-11` (44px), with the bar itself growing from `h-14`
+  (56px) to `h-16` (64px) to match; the logo/name block also gained a `max-w-[45%]` cap so a very long church name
+  (the text fallback) can't crowd out the nav entirely on a narrow desktop window.
+- **`navLabel` (`PageSectionDto.navLabel`, `PageSection.navLabel`)** — an optional per-section override of what
+  that section's link in the header says, e.g. `"Home"` instead of a long `HERO` title. Unvalidated beyond the
+  string type, same posture as `hidden`; `sectionNavLabel()` in `page-header.tsx` checks it first and only falls
+  back to the section's own heading/title when it's unset, so this is purely additive — no existing page's nav
+  labels change unless an admin explicitly sets one.
+- **Custom header links (`Page.headerLinks`/`draftHeaderLinks`, `HeaderLinkDto`)** — a plain `{ label, url }[]`
+  jsonb array (added to the same still-unshipped `AddPageShowHeader` migration alongside the columns above, rather
+  than a second migration, since it hadn't been deployed yet), shown in the nav *after* the automatic per-section
+  links, always opening in a new tab (`target="_blank"`) regardless of what they point to — same behavior `FOOTER`'s
+  own `content.links` already has. `HeaderLinkDto` requires non-empty `label`/`url` on each entry (`@IsNotEmpty()`),
+  the one place this feature validates content beyond a bare type check. `duplicate()` deep-clones `headerLinks`
+  the same way it already does `sections`, for the same "two genuinely independent pages" reasoning. The storage
+  shape stays exactly this simple — no `type`/`pageId` discriminant, no server-side resolution — because the
+  "pick one of this church's other Pages, or type an external URL" experience an admin actually wants lives
+  entirely in discuva-admin's editor instead (below): picking a Page there just writes that page's already-known
+  public URL into the same plain `url` field, so this API/DTO/entity needs no awareness that the distinction
+  exists at all.
+- **discuva-admin's link editor: a Page/Link toggle per link** (`app/pages/page.tsx`) — "Page" mode shows a
+  `<select>` of every page this church has (`usePages()`'s already-loaded `pages` list — no new fetch), each
+  labeled by its own title with `" (draft)"` appended for anything unpublished (still selectable — two pages
+  being built together may need to cross-link before either publishes), and writes that page's resolved public
+  URL (`getTenantMemberAppUrl()` + `/p/{slug}`) straight into `url`; "Link" mode is the original plain text input.
+  Purely local editing state (`headerLinkModes`, index-aligned with `headerLinks`, never sent to the backend) —
+  re-opening a saved page infers each link's mode by checking whether its `url` already matches one of this
+  church's own page URLs, defaulting to "Link" otherwise. The one accepted tradeoff of not storing a live
+  `pageId` reference: if the target page's slug is later renamed, a "Page"-mode link saved before that rename
+  goes stale (still points at the old slug) exactly like a "Link"-mode one would if someone changed that same URL
+  elsewhere — deliberately not solved by this feature, in favor of keeping the API surface this simple.
+- **The fixed bar now casts a `shadow-sm`, and the spacer reserves `barHeight + 12` rather than an exact match** —
+  a real reported complaint: on mobile, an edge-to-edge `HERO` image (which has no padding of its own to borrow)
+  sitting flush against the header read as "stuck," especially with mobile's already-tight vertical space. The
+  extra 12px isn't `HERO`-specific — it's a universal small gap under the header, benefiting every section a page
+  might open with — and the click-to-scroll offset in `handleNavClick` was updated to match (`barHeight + 12`) so
+  a clicked link's target lands with the same breathing room the initial page load already has, not flush against
+  the bar.
+- **Horizontal padding grows with the viewport** (`px-6 sm:px-10 lg:px-16`, was a flat `px-6`) — a real reported
+  complaint on a genuinely wide desktop window: the logo and the last nav link both sat pinned to the literal
+  edge of the browser, which read as unfinished rather than deliberate. A flat padding value that looked fine on
+  a laptop screen just doesn't scale to a 3000px-wide monitor.
+- **Bug fix: a `navLabel` on a `FOOTER` section was silently giving it a nav link**, contradicting `FOOTER`'s own
+  "page chrome, not something to jump to" rule (`SECTION_TYPE_META.FOOTER.description`) — introduced by `navLabel`
+  checking before the type `switch` instead of after. `sectionNavLabel()` now excludes `FOOTER` outright, before
+  the `navLabel` check, so setting one there (nothing in discuva-admin's own editor stopped that) still can't put
+  it in the nav. A side effect worth naming, not a second bug: `STATS` — which has no heading field of its own —
+  now *can* get a nav link if given an explicit `navLabel`, since it isn't specifically excluded the way `FOOTER`
+  is; previously it could never appear in the nav at all.
+
+**discuva-admin's Header editor redesigned** (`app/pages/page.tsx`) — four follow-up complaints from live use:
+- **Visual organization**: the whole thing now lives inside one bordered card with a distinct toggle strip at the
+  top, instead of a flat block sitting between Theme and Font with no visual separation of its own.
+- **A live preview** (`HeaderPreview`, module-level in `page.tsx`) — a small static mock of the real header (logo/
+  name, nav pills, first one in the accent color) computed from whatever's currently in the editor: `sections`
+  mapped through `previewNavLabel` (a duplicate of discuva-member's own `sectionNavLabel` — same "two independent
+  repos" duplication `PageSection` itself already has) plus `headerLinks`, so an admin sees roughly what it'll
+  look like without saving and opening the real preview link. Not pixel-identical to the real `PageHeader` — no
+  fixed positioning or scrollspy needed for a thumbnail — and the logo falls back through `headerLogoUrl ??
+  tenant?.logoUrl` (`useTenant()`, the same tenant-branding context the rest of discuva-admin already reads from)
+  so the preview looks right even before this page has its own logo override set.
+- **A cleaner links editor**: collapsed from two stacked rows per link down to one — label, a small icon toggle
+  (`FileText` for "Page" mode / `ExternalLink` for "Link" mode, single click cycles between them) that replaced
+  the previous two-button text-pill toggle, the dropdown-or-URL field, and remove, all in one row.
+- **The per-section "Nav label" field is now conditional**: only rendered when the page's header is actually on
+  (`SectionsEditor`/`SectionContentEditor` both gained a `showHeader` prop, threaded down from `page.tsx`), and
+  never rendered at all for `FOOTER` sections — matching the same "Footer is never navigable" rule the bug fix
+  above enforces on the rendering side, so the editor doesn't offer a field that would silently do nothing.
 
 **`REGISTRATION`'s embedded form card (discuva-member, `components/forms/embedded-form-fill.tsx`)** — several
 usability fixes, all in this one shared component (not Pages-specific, but only ever mounted from
@@ -4749,7 +4913,7 @@ treatment — `notFound()` already produces a real 404, which no crawler indexes
 | POST   | `/pages`                    | AdminGuard (PAGES_WRITE) | Create a page with its sections in one call |
 | GET    | `/pages`                    | AdminGuard (PAGES_READ)  | List all pages — unpaginated, same policy as Forms |
 | GET    | `/pages/:id`                | AdminGuard (PAGES_READ)  | Get one page with sections |
-| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`theme`/`accentColor`/`backgroundColor`/`fontFamily`/`sections` write to `draft*` only (an array = replace wholesale, no per-section id to diff against; each section may carry an optional `style: {align?, columns?, size?, accentColor?}` and an optional `hidden: boolean`); `slug`/`isPublished` still write live immediately |
+| PATCH  | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Update page. `title`/`seoDescription`/`theme`/`accentColor`/`backgroundColor`/`fontFamily`/`showHeader`/`headerLogoUrl`/`headerLinks`/`sections` write to `draft*` only (arrays = replace wholesale, no per-item id to diff against; each section may carry an optional `style: {align?, columns?, size?, accentColor?}`, an optional `hidden: boolean`, and an optional `navLabel: string`); `slug`/`isPublished` still write live immediately |
 | DELETE | `/pages/:id`                | AdminGuard (PAGES_WRITE) | Delete a page |
 | POST   | `/pages/:id/publish`        | AdminGuard (PAGES_WRITE) | Copies every `draft*` field onto its live counterpart and sets `isPublished = true` |
 | POST   | `/pages/:id/duplicate`      | AdminGuard (PAGES_WRITE) | Body `{ slug, title? }`. Copies the source page's current draft into a brand-new, unpublished page under the given slug — see PageService.duplicate's own comment |

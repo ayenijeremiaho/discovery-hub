@@ -8,7 +8,7 @@ import { In, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { ClsService } from 'nestjs-cls';
 import 'multer';
-import { Page, PageSection } from '../entity/page.entity';
+import { HeaderLink, Page, PageSection } from '../entity/page.entity';
 import { TestimonialSubmission } from '../entity/testimonial-submission.entity';
 import { Form } from '../../forms/entity/form.entity';
 import { Tenant } from '../../tenant/entity/tenant.entity';
@@ -71,6 +71,9 @@ export class PageService {
       accentColor: dto.accentColor ?? null,
       backgroundColor: dto.backgroundColor ?? null,
       fontFamily: dto.fontFamily ?? null,
+      showHeader: dto.showHeader ?? false,
+      headerLogoUrl: dto.headerLogoUrl ?? null,
+      headerLinks: dto.headerLinks ?? [],
       sections: dto.sections,
       draftTitle: dto.title,
       draftSeoDescription: dto.seoDescription ?? null,
@@ -78,6 +81,9 @@ export class PageService {
       draftAccentColor: dto.accentColor ?? null,
       draftBackgroundColor: dto.backgroundColor ?? null,
       draftFontFamily: dto.fontFamily ?? null,
+      draftShowHeader: dto.showHeader ?? false,
+      draftHeaderLogoUrl: dto.headerLogoUrl ?? null,
+      draftHeaderLinks: dto.headerLinks ?? [],
       draftSections: dto.sections,
     });
     return this.pageRepo.save(page);
@@ -108,6 +114,9 @@ export class PageService {
       JSON.stringify(source.draftSections),
     ) as PageSection[];
     await this.assertValidSections(sections);
+    const headerLinks = JSON.parse(
+      JSON.stringify(source.draftHeaderLinks ?? []),
+    ) as HeaderLink[];
 
     const title = dto.title ?? `${source.draftTitle} (Copy)`;
     const page = this.pageRepo.create({
@@ -119,6 +128,9 @@ export class PageService {
       accentColor: source.draftAccentColor,
       backgroundColor: source.draftBackgroundColor,
       fontFamily: source.draftFontFamily,
+      showHeader: source.draftShowHeader,
+      headerLogoUrl: source.draftHeaderLogoUrl,
+      headerLinks,
       sections,
       draftTitle: title,
       draftSeoDescription: source.draftSeoDescription,
@@ -126,6 +138,9 @@ export class PageService {
       draftAccentColor: source.draftAccentColor,
       draftBackgroundColor: source.draftBackgroundColor,
       draftFontFamily: source.draftFontFamily,
+      draftShowHeader: source.draftShowHeader,
+      draftHeaderLogoUrl: source.draftHeaderLogoUrl,
+      draftHeaderLinks: headerLinks,
       draftSections: sections,
     });
     return this.pageRepo.save(page);
@@ -161,6 +176,9 @@ export class PageService {
       accentColor: page.accentColor,
       backgroundColor: page.backgroundColor,
       fontFamily: page.fontFamily,
+      showHeader: page.showHeader,
+      headerLogoUrl: page.headerLogoUrl,
+      headerLinks: page.headerLinks,
       church: await this.resolveChurchInfo(),
       sections: this.withoutHiddenSections(
         await this.withApprovedTestimonials(page, page.sections),
@@ -193,6 +211,9 @@ export class PageService {
       accentColor: page.draftAccentColor,
       backgroundColor: page.draftBackgroundColor,
       fontFamily: page.draftFontFamily,
+      showHeader: page.draftShowHeader,
+      headerLogoUrl: page.draftHeaderLogoUrl,
+      headerLinks: page.draftHeaderLinks,
       church: await this.resolveChurchInfo(),
       sections: this.withoutHiddenSections(
         await this.withApprovedTestimonials(page, page.draftSections),
@@ -200,16 +221,18 @@ export class PageService {
     };
   }
 
-  // Backs both PublicPageDto.church: the automatic minimal footer shown
-  // when a page has no FOOTER section at all (name + copyright line), and
-  // a FOOTER section's own optional "show contact info" toggle (address +
-  // support email). Shares the same `tenant-branding:${tenantId}` cache
+  // Backs PublicPageDto.church: the automatic minimal footer shown when a
+  // page has no FOOTER section at all (name + copyright line), a FOOTER
+  // section's own optional "show contact info" toggle (address + support
+  // email), and — new — the optional header's logo/name (see
+  // Page.showHeader). Shares the same `tenant-branding:${tenantId}` cache
   // entry EmailQueueService/PdfService/TenantCurrencyService already
   // populate (see TenantCurrencyService's own comment) — this is very
   // likely a cache hit, not a fresh query, for any tenant with an active
   // Page. No tenant CLS context (shouldn't happen for a real request here,
   // but mirrors TenantCurrencyService's own defensive fallback) falls back
-  // to the CHURCH_NAME env default with no address/email.
+  // to the CHURCH_NAME env default with no logo/address/email — same
+  // fallback TenantInfoController's own toProfile() uses for logoUrl.
   private async resolveChurchInfo(): Promise<PublicPageDto['church']> {
     const tenantId = this.cls.get('tenantId');
     const tenant = tenantId
@@ -221,6 +244,8 @@ export class PageService {
       : null;
     return {
       name: tenant?.name ?? this.configService.get<string>('CHURCH_NAME'),
+      logoUrl:
+        tenant?.logoUrl ?? this.configService.get<string>('LOGO_URL') ?? null,
       address: tenant?.address ?? null,
       supportEmail: tenant?.supportEmail ?? null,
     };
@@ -325,6 +350,11 @@ export class PageService {
       page.draftBackgroundColor = dto.backgroundColor;
     }
     if (dto.fontFamily !== undefined) page.draftFontFamily = dto.fontFamily;
+    if (dto.showHeader !== undefined) page.draftShowHeader = dto.showHeader;
+    if (dto.headerLogoUrl !== undefined) {
+      page.draftHeaderLogoUrl = dto.headerLogoUrl;
+    }
+    if (dto.headerLinks !== undefined) page.draftHeaderLinks = dto.headerLinks;
     if (dto.sections !== undefined) {
       await this.assertValidSections(dto.sections);
       page.draftSections = dto.sections;
@@ -352,6 +382,9 @@ export class PageService {
     page.accentColor = page.draftAccentColor;
     page.backgroundColor = page.draftBackgroundColor;
     page.fontFamily = page.draftFontFamily;
+    page.showHeader = page.draftShowHeader;
+    page.headerLogoUrl = page.draftHeaderLogoUrl;
+    page.headerLinks = page.draftHeaderLinks;
     page.sections = page.draftSections;
     page.isPublished = true;
 
@@ -397,6 +430,11 @@ export class PageService {
           this.optionalString(section.content, 'subtitle', label);
           this.optionalString(section.content, 'dateRangeText', label);
           this.optionalString(section.content, 'backgroundImageUrl', label);
+          this.optionalString(
+            section.content,
+            'backgroundImageUrlMobile',
+            label,
+          );
           this.assertPaired(section.content, 'ctaLabel', 'ctaUrl', label);
           break;
         case PageSectionType.ABOUT:
@@ -527,6 +565,26 @@ export class PageService {
             },
           );
           break;
+      }
+    }
+    this.assertNoDuplicateSingletonSections(sections);
+  }
+
+  // A page has exactly one opening banner and, if it has one at all,
+  // exactly one footer — unlike REGISTRATION (documented above as
+  // intentionally multi-instance, e.g. event registration + a separate
+  // merch pre-order form), a second HERO or FOOTER doesn't represent
+  // anything real. discuva-admin's own picker already grays these out
+  // once one exists; this is defense-in-depth for the API being hit
+  // directly (e.g. via Postman).
+  private assertNoDuplicateSingletonSections(sections: PageSectionDto[]): void {
+    const singletonTypes = [PageSectionType.HERO, PageSectionType.FOOTER];
+    for (const type of singletonTypes) {
+      const count = sections.filter((s) => s.type === type).length;
+      if (count > 1) {
+        throw new BadRequestException(
+          `A page can only have one "${type}" section — found ${count}`,
+        );
       }
     }
   }

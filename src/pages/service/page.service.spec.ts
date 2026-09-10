@@ -56,6 +56,7 @@ const mockConfigService = {
 };
 const DEFAULT_CHURCH = {
   name: 'Test Church',
+  logoUrl: null,
   address: null,
   supportEmail: null,
 };
@@ -168,6 +169,28 @@ describe('PageService', () => {
                   title: 'Higher Ground 2026',
                   ctaLabel: 'Register',
                   ctaUrl: 'https://example.com/register',
+                },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts a HERO section with backgroundImageUrlMobile set', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.HERO,
+                content: {
+                  title: 'Higher Ground 2026',
+                  backgroundImageUrl: 'https://example.com/hero.jpg',
+                  backgroundImageUrlMobile:
+                    'https://example.com/hero-mobile.jpg',
                 },
               },
             ],
@@ -629,7 +652,66 @@ describe('PageService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('defaults theme to minimal and accentColor/backgroundColor/fontFamily to null when omitted', async () => {
+    it('rejects a page with two HERO sections', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.HERO,
+                content: { title: 'First' },
+              },
+              {
+                id: 'sec-2',
+                type: PageSectionType.HERO,
+                content: { title: 'Second' },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a page with two FOOTER sections', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              { id: 'sec-1', type: PageSectionType.FOOTER, content: {} },
+              { id: 'sec-2', type: PageSectionType.FOOTER, content: {} },
+            ],
+          }),
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('accepts a page with two REGISTRATION sections (deliberately unrestricted, e.g. event registration + a separate merch pre-order form)', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue(null);
+      mockFormRepo.findOneBy.mockResolvedValue({ id: 'form-1' });
+      await expect(
+        service.create(
+          makeDto({
+            sections: [
+              {
+                id: 'sec-1',
+                type: PageSectionType.REGISTRATION,
+                content: { formId: 'form-1' },
+              },
+              {
+                id: 'sec-2',
+                type: PageSectionType.REGISTRATION,
+                content: { formId: 'form-1' },
+              },
+            ],
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('defaults theme to minimal and accentColor/backgroundColor/fontFamily/showHeader/headerLogoUrl when omitted', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(null);
       await service.create(makeDto());
       expect(mockPageRepo.save).toHaveBeenCalledWith(
@@ -638,15 +720,19 @@ describe('PageService', () => {
           accentColor: null,
           backgroundColor: null,
           fontFamily: null,
+          showHeader: false,
+          headerLogoUrl: null,
           draftTheme: 'minimal',
           draftAccentColor: null,
           draftBackgroundColor: null,
           draftFontFamily: null,
+          draftShowHeader: false,
+          draftHeaderLogoUrl: null,
         }),
       );
     });
 
-    it('sets theme/accentColor/backgroundColor/fontFamily on both live and draft when provided', async () => {
+    it('sets theme/accentColor/backgroundColor/fontFamily/showHeader/headerLogoUrl on both live and draft when provided', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(null);
       await service.create(
         makeDto({
@@ -654,6 +740,8 @@ describe('PageService', () => {
           accentColor: '#f97316',
           backgroundColor: '#1a1030',
           fontFamily: 'poppins',
+          showHeader: true,
+          headerLogoUrl: 'https://cdn/yfc-logo.png',
         }),
       );
       expect(mockPageRepo.save).toHaveBeenCalledWith(
@@ -662,10 +750,14 @@ describe('PageService', () => {
           accentColor: '#f97316',
           backgroundColor: '#1a1030',
           fontFamily: 'poppins',
+          showHeader: true,
+          headerLogoUrl: 'https://cdn/yfc-logo.png',
           draftTheme: 'bold',
           draftAccentColor: '#f97316',
           draftBackgroundColor: '#1a1030',
           draftFontFamily: 'poppins',
+          draftShowHeader: true,
+          draftHeaderLogoUrl: 'https://cdn/yfc-logo.png',
         }),
       );
     });
@@ -703,6 +795,8 @@ describe('PageService', () => {
             draftAccentColor: '#f97316',
             draftBackgroundColor: '#1a1030',
             draftFontFamily: 'poppins',
+            draftShowHeader: true,
+            draftHeaderLogoUrl: 'https://cdn/yfc-logo.png',
             draftSections: [heroSection, faqSection],
           }),
         )
@@ -718,6 +812,8 @@ describe('PageService', () => {
           accentColor: '#f97316',
           backgroundColor: '#1a1030',
           fontFamily: 'poppins',
+          showHeader: true,
+          headerLogoUrl: 'https://cdn/yfc-logo.png',
           sections: [heroSection, faqSection],
           draftTitle: 'Higher Ground 2026 (Copy)',
           draftSections: [heroSection, faqSection],
@@ -859,13 +955,15 @@ describe('PageService', () => {
       );
     });
 
-    it('routes theme/accentColor/backgroundColor/fontFamily to draft*, not live', async () => {
+    it('routes theme/accentColor/backgroundColor/fontFamily/showHeader/headerLogoUrl to draft*, not live', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(
         makeExistingPage({
           theme: 'minimal',
           accentColor: null,
           backgroundColor: null,
           fontFamily: null,
+          showHeader: false,
+          headerLogoUrl: null,
         }),
       );
       await service.update('page-1', {
@@ -873,6 +971,8 @@ describe('PageService', () => {
         accentColor: '#f97316',
         backgroundColor: '#1a1030',
         fontFamily: 'bebas-neue',
+        showHeader: true,
+        headerLogoUrl: 'https://cdn/yfc-logo.png',
       });
       expect(mockPageRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -880,10 +980,14 @@ describe('PageService', () => {
           accentColor: null,
           backgroundColor: null,
           fontFamily: null,
+          showHeader: false,
+          headerLogoUrl: null,
           draftTheme: 'bold',
           draftAccentColor: '#f97316',
           draftBackgroundColor: '#1a1030',
           draftFontFamily: 'bebas-neue',
+          draftShowHeader: true,
+          draftHeaderLogoUrl: 'https://cdn/yfc-logo.png',
         }),
       );
     });
@@ -958,17 +1062,21 @@ describe('PageService', () => {
       expect(mockCloudinaryService.deleteByPublicId).not.toHaveBeenCalled();
     });
 
-    it('copies draftTheme/draftAccentColor/draftBackgroundColor/draftFontFamily onto the live columns', async () => {
+    it('copies draftTheme/draftAccentColor/draftBackgroundColor/draftFontFamily/draftShowHeader/draftHeaderLogoUrl onto the live columns', async () => {
       mockPageRepo.findOneBy.mockResolvedValue(
         makeExistingPage({
           theme: 'minimal',
           accentColor: null,
           backgroundColor: null,
           fontFamily: null,
+          showHeader: false,
+          headerLogoUrl: null,
           draftTheme: 'bold',
           draftAccentColor: '#f97316',
           draftBackgroundColor: '#1a1030',
           draftFontFamily: 'playfair',
+          draftShowHeader: true,
+          draftHeaderLogoUrl: 'https://cdn/yfc-logo.png',
         }),
       );
       await service.publish('page-1');
@@ -978,6 +1086,8 @@ describe('PageService', () => {
           accentColor: '#f97316',
           backgroundColor: '#1a1030',
           fontFamily: 'playfair',
+          showHeader: true,
+          headerLogoUrl: 'https://cdn/yfc-logo.png',
         }),
       );
     });
@@ -1006,6 +1116,20 @@ describe('PageService', () => {
       });
     });
 
+    it('passes through showHeader and headerLogoUrl from the live columns', async () => {
+      mockPageRepo.findOneBy.mockResolvedValue({
+        id: 'page-1',
+        slug: 'higher-ground-2026',
+        sections: [heroSection],
+        isPublished: true,
+        showHeader: true,
+        headerLogoUrl: 'https://cdn/yfc-logo.png',
+      });
+      const result = await service.getForPublic('higher-ground-2026');
+      expect(result.showHeader).toBe(true);
+      expect(result.headerLogoUrl).toBe('https://cdn/yfc-logo.png');
+    });
+
     it("includes the current tenant's church info, resolved via CLS + the shared tenant-branding cache entry", async () => {
       mockPageRepo.findOneBy.mockResolvedValue({
         id: 'page-1',
@@ -1017,6 +1141,7 @@ describe('PageService', () => {
       mockTenantRepo.findOneBy.mockResolvedValue({
         id: 'tenant-1',
         name: 'Grace Chapel',
+        logoUrl: 'https://cdn/grace-chapel-logo.png',
         address: '123 Main St',
         supportEmail: 'hello@gracechapel.example',
       });
@@ -1025,6 +1150,7 @@ describe('PageService', () => {
 
       expect(result.church).toEqual({
         name: 'Grace Chapel',
+        logoUrl: 'https://cdn/grace-chapel-logo.png',
         address: '123 Main St',
         supportEmail: 'hello@gracechapel.example',
       });
