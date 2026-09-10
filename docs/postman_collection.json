@@ -314,6 +314,14 @@
       "key": "testimonialSubmissionId",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "departmentGoalCycleId",
+      "value": ""
+    },
+    {
+      "key": "departmentGoalId",
+      "value": ""
     }
   ],
   "auth": {
@@ -11292,6 +11300,542 @@
             }
           },
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "Department Goals (Admin)",
+      "item": [
+        {
+          "name": "Create Goal Cycle (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Q3 2026 Goals\",\n  \"startDate\": \"2026-07-01\",\n  \"graceDeadline\": \"2026-07-14\",\n  \"endDate\": \"2026-09-30\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"id\": \"c1c2c3c4-1111-4c5d-8e9f-0a1b2c3d4e5f\",\n  \"name\": \"Q3 2026 Goals\",\n  \"startDate\": \"2026-07-01\",\n  \"graceDeadline\": \"2026-07-14\",\n  \"endDate\": \"2026-09-30\",\n  \"isActive\": true\n}"
+            }
+          ],
+          "description": "Opens a new church-wide goal cycle. Dates must satisfy startDate <= graceDeadline <= endDate.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.id) pm.collectionVariables.set('departmentGoalCycleId', res.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Goal Cycles (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles"
+              ]
+            }
+          },
+          "response": [],
+          "description": "Unpaginated, same policy as Pages/Church Calendar \u2014 admin-controlled reference data."
+        },
+        {
+          "name": "Update Goal Cycle \u2014 Move Grace Deadline (Admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles/{{departmentGoalCycleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles",
+                "{{departmentGoalCycleId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graceDeadline\": \"2026-07-21\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "description": "The one field expected to move after creation \u2014 the church can push the opening window's close date out anytime. Re-validated against startDate/endDate on every call."
+        },
+        {
+          "name": "Get Goals for Cycle \u2014 Cross-Department (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles/{{departmentGoalCycleId}}/goals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "goals"
+              ]
+            }
+          },
+          "response": [],
+          "description": "Every department's goals for this cycle \u2014 backs the church's rating-entry screen and the dashboard.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (Array.isArray(res) && res[0]?.id) pm.collectionVariables.set('departmentGoalId', res[0].id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Correct a Goal (Admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles/{{departmentGoalCycleId}}/goals/{{departmentGoalId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "goals",
+                "{{departmentGoalId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Grow youth attendance by 15%\",\n  \"description\": \"Corrected wording after HOD flagged a typo\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "description": "IN_PROGRESS stage only, and only while the goal is unrated. Always audit-logged as DEPARTMENT_GOAL_CORRECTED \u2014 visible to the HOD via the member-facing history endpoint."
+        },
+        {
+          "name": "Submit Church Rating (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles/{{departmentGoalCycleId}}/goals/{{departmentGoalId}}/church-rating",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "goals",
+                "{{departmentGoalId}}",
+                "church-rating"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rating\": 4,\n  \"reason\": \"Strong progress, slightly short of the stretch target\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "description": "Write-once \u2014 no corresponding PATCH. REVIEWED stage only. Not visible to the HOD until their own self-rating is also in."
+        },
+        {
+          "name": "Get Department Goal Report (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/cycles/{{departmentGoalCycleId}}/report",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "report"
+              ]
+            }
+          },
+          "response": [],
+          "description": "Per-department { avgSelfScore, avgChurchScore, gap } for this cycle \u2014 a large positive gap (self consistently higher than church) is worth a conversation on its own."
+        }
+      ]
+    },
+    {
+      "name": "Department Goals (Member)",
+      "item": [
+        {
+          "name": "Get My Current Department Goals (Member)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/current",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "current"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "Every department relevant to the caller (led, or a member of), at their role's visibility. HOD/Deputy-HOD see goals live during OPENING; a plain member sees nothing for a department until its goals lock. Ratings are null on every goal until BOTH sides have rated it."
+        },
+        {
+          "name": "Create a Goal (HOD)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/cycles/{{departmentGoalCycleId}}/departments/{{departmentId}}/goals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "departments",
+                "{{departmentId}}",
+                "goals"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Grow youth attendance by 15%\",\n  \"description\": \"Track via the weekly headcount\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "HOD of this specific department only, OPENING stage only.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.id) pm.collectionVariables.set('departmentGoalId', res.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update a Goal (HOD)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/cycles/{{departmentGoalCycleId}}/departments/{{departmentId}}/goals/{{departmentGoalId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "departments",
+                "{{departmentId}}",
+                "goals",
+                "{{departmentGoalId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Grow youth attendance by 20%\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "OPENING stage only. Rejected once either rating has been submitted (frozen)."
+        },
+        {
+          "name": "Submit Self Rating (HOD)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/cycles/{{departmentGoalCycleId}}/departments/{{departmentId}}/goals/{{departmentGoalId}}/self-rating",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "departments",
+                "{{departmentId}}",
+                "goals",
+                "{{departmentGoalId}}",
+                "self-rating"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rating\": 4,\n  \"reason\": \"Hit 18% growth by the final count\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "Write-once, REVIEWED stage only. Not reflected back on GET .../current until the church's rating is also in."
+        },
+        {
+          "name": "Get Goal History (Dept. Lead)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/cycles/{{departmentGoalCycleId}}/departments/{{departmentId}}/goals/{{departmentGoalId}}/history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "departments",
+                "{{departmentId}}",
+                "goals",
+                "{{departmentGoalId}}",
+                "history"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "HOD or Deputy-HOD of this department only \u2014 every DEPARTMENT_GOAL_CORRECTED audit entry for this goal, so a church correction is something they can verify, not discover secondhand."
+        },
+        {
+          "name": "Download Goals PDF (HOD)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/cycles/{{departmentGoalCycleId}}/departments/{{departmentId}}/pdf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "departments",
+                "{{departmentId}}",
+                "pdf"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "application/pdf \u2014 the department's current goals at whatever visibility rules already apply (goals always, ratings only once both sides have submitted)."
+        },
+        {
+          "name": "Delete a Goal (HOD)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/department-goals/member/cycles/{{departmentGoalCycleId}}/departments/{{departmentId}}/goals/{{departmentGoalId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "department-goals",
+                "member",
+                "cycles",
+                "{{departmentGoalCycleId}}",
+                "departments",
+                "{{departmentId}}",
+                "goals",
+                "{{departmentGoalId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "description": "OPENING stage only. Rejected once either rating has been submitted (frozen)."
         }
       ]
     },

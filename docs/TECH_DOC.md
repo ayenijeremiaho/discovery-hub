@@ -2756,6 +2756,22 @@ by department (`GET /departments/:id/workers`) remains paginated as it can be la
 
 **Routes prefix:** `/departments`
 
+**discuva-admin bug fix: the departments list's own "Leadership" column always read "No leads."**
+`GET /departments` (the plain list call `useDepartments()`'s `fetchDepartments` uses) never included a `leads`
+relation at all — `DepartmentService.getAll()` is a bare `find()` with no `relations`, and `DepartmentLead` isn't
+a column on `Department`, it's a separate join table. The frontend's `Department.leads` field was simply never
+populated by anything, so the table's Leadership column showed "No leads" for every department regardless of
+actual assignment — reported live: assigning an HOD showed correctly in the detail panel (which fetches leads
+via the per-department `GET /departments/leads/:id` endpoint) but the list row next to it stayed stale. Fixed by
+a new, deliberately separate `fetchAllDepartmentLeads()` in `hooks/use-departments.ts` (one call to
+`GET /departments/leads`, grouped client-side by department id) — **not** folded into `fetchDepartments()`
+itself, since that one auto-fires on mount for every one of `useDepartments()`'s other consumers (Announcements,
+Workers, Members, Volunteering, bulk-department/bulk-promote), several of which only need department names for
+a dropdown and may not even hold `DEPARTMENTS_READ` — baking the leads call in there would 403 on every one of
+those unrelated pages for an admin without that permission. Only `app/departments/page.tsx` calls the new
+function (on mount, on manual Refresh, and after a successful assign/remove-lead), so the fix is scoped to
+exactly where the bug was reported.
+
 ### Pastor Feedback Module
 
 A weekly, structured feedback channel from departments up to the pastorate — the department's HOD or Assistant HOD (D_HOD) submits it; a pastor reads and responds, from either the admin portal or the mobile app.
@@ -4966,6 +4982,243 @@ The member app's list-page header is its own `KNOWN_ASSETS` entry (`church-calen
 | DELETE | `/church-calendar/:id`               | AdminGuard (CHURCH_CALENDAR_WRITE) | Delete a calendar |
 | POST   | `/church-calendar/:id/images`        | AdminGuard (CHURCH_CALENDAR_WRITE) | Multipart, field name `file`, max size `MAX_CHURCH_CALENDAR_IMAGE_UPLOAD_MB`. Generic upload for any entry's photo slot — returns `{ url, publicId }` only |
 | GET    | `/church-calendar/member/current`    | JwtAuthGuard (member+worker)       | Published calendars with `endDate >= today` (church-timezone-aware), ordered `startDate` ascending |
+
+### Department Goals (`src/department-goal/`)
+
+A per-department, per-review-cycle goal-setting and blind two-sided rating workflow: each cycle, every
+department's Head of Department (HOD) writes goals for their team during a short opening window; once that
+window closes, goals lock and the department works toward them; at cycle end, both the church (via
+discuva-admin) and the HOD (via discuva-member) rate each goal 1–5 with a reason, independently, and neither
+sees the other's score until both are in — then both reveal together to the HOD, Deputy-HOD, and department.
+A `DepartmentGoalCycle` is global/church-wide — one shared opening window covers every department at once, not
+a cycle per department.
+
+**Entities:**
+
+- `DepartmentGoalCycle` (`department_goal_cycles`) — `name`, `startDate`/`graceDeadline`/`endDate` (plain
+  `date` columns, `'yyyy-MM-dd'`, compared via `DateService.today()` — same convention as `PledgeCampaign`/
+  `ChurchCalendar`), `isActive` (church can deactivate/cancel a cycle early).
+- `DepartmentGoal` (`department_goals`) — `cycle` (M:1, `CASCADE` — a goal doesn't outlive its cycle),
+  `department` (M:1, **`RESTRICT`**, not `CASCADE` — this is a compliance record; department deletion is
+  blocked by existing goal history rather than silently erasing it, the same posture
+  `DepartmentService.delete` already takes when workers are still assigned), `title`, `description` (nullable),
+  `churchRating`/`selfRating` (nullable smallint, 1–5), `churchRatingReason`/`selfRatingReason` (nullable text),
+  `churchRatedAt`/`selfRatedAt` (nullable timestamptz), `churchRatedByAdmin`/`selfRatedByMember` (nullable FK,
+  `SET NULL`). A goal's `title`/`description` become immutable (service-layer check, not a DB constraint) the
+  instant either rating is set.
+
+**Indexes on `department_goals`**: a composite `(cycle_id, department_id)`, not two standalone single-column
+indexes — `getCurrentForMember` (the hottest read path, hit on every load of a member's or HOD's goals page)
+filters on both together, and the composite still fully serves the cycle_id-only queries (`getGoalsForCycle`,
+`getReport`) via the leftmost-prefix rule, so a separate `cycle_id` index would only add write overhead for no
+read benefit. A standalone `department_id` index is kept alongside it (not covered by the composite, since
+`department_id` isn't the leading column) so the `RESTRICT` FK on `departments.id` doesn't force a full table
+scan of `department_goals` every time an admin attempts to delete a department. `church_rated_by_admin_id`/
+`self_rated_by_member_id` are deliberately left unindexed — neither `Admin` nor `Member` rows are ever
+hard-deleted anywhere in this codebase (member deletion isn't exposed at all, per this doc's own policy; admins
+are deactivated via `isActive`, never deleted), so the `SET NULL` cascade those FKs exist for can never actually
+fire, and an index that backs a cascade check that never runs is pure overhead. `department_goal_cycles` itself
+carries no index beyond its primary key — bounded, admin-created reference data (a handful of cycles per tenant
+per year) stays small enough for the whole table's lifetime that Postgres's planner would prefer a sequential
+scan over an index scan regardless, the same reasoning `departments`/`venues` already go unindexed on their own
+non-PK columns.
+
+**Stage is computed, never stored** (`DepartmentGoalService.getEffectiveStage`) — every guard and query goes
+through this one function rather than comparing `graceDeadline`/`endDate` directly at the call site, since a
+real instance of that exact bug (an `isActive`-style flag ANDed with a date check inconsistently across call
+sites) already exists elsewhere in this codebase, in `pledge.service.ts`:
+
+```
+INACTIVE      — cycle.isActive === false (blocks every write path, including both ratings — a
+                deactivated/cancelled cycle can't still be rated after the fact)
+OPENING       — today < graceDeadline           (HOD writes/edits/removes goals)
+IN_PROGRESS   — graceDeadline <= today < endDate (church can correct a goal, audit-logged; no one else writes)
+REVIEWED      — today >= endDate                 (both ratings can be submitted, write-once each)
+```
+
+`INACTIVE` is deliberately distinct from `REVIEWED`, not a fifth date-derived bucket folded into it.
+
+**Authorization — department-scoped, not "is a lead somewhere."** `DepartmentService` gained two new methods
+(`assertIsDepartmentLead(memberId, departmentId, leadType?)`, `getLeadRoles(memberId)`) rather than reusing
+the pre-existing `getDepartmentIdForLead`, which resolves "the" department for a member via an arbitrary
+`findOne` and silently assumes a member leads at most one department — untrue, since `DepartmentLead` has no
+uniqueness constraint on `workerProfile`, only on `(department, leadType)`. Every HOD-write endpoint calls
+`assertIsDepartmentLead(memberId, departmentId, DepartmentLeadTypeEnum.HOD)` scoped to the department in the
+URL, not inferred.
+
+**Visibility rule for `GET /department-goals/member/current`** — resolves every department relevant to the
+caller (any department they lead, via `DepartmentLead`, **plus** their `WorkerProfile.department`/
+`secondaryDepartment`) and returns one entry per department. A department the caller *leads* resolves via
+`DepartmentLead`, not `WorkerProfile` — a Deputy-HOD's own primary department can differ from the department
+they actually lead, and the response must reflect the led department, not their profile's. Per role: HOD/
+Deputy-HOD see the goal list live from day one, including mid-draft during `OPENING`; a plain department
+member sees nothing for that department until the cycle has locked (`IN_PROGRESS` or later) — goals are
+withheld (`goals: null`), never partially shown. Every goal's `churchRating`/`selfRating` (and their reasons)
+are nulled out server-side unless **both** are non-null, for every role including the HOD who just submitted
+one side — "neither sees the other's score until both are in" is enforced uniformly, not by role; the HOD's
+own just-submitted rating is confirmed to them via the submit response itself, not by this endpoint reflecting
+it back early.
+
+**Two controllers**, same route-ordering rationale as Church Calendar's admin/member split — mounted at
+distinct base paths so the admin controller's `:id` wildcard can't swallow the member controller's routes:
+
+- `DepartmentGoalAdminController` (`department-goals`, `AdminGuard` + `DEPARTMENT_GOALS_READ`/`WRITE`,
+  `@RequiresModule('department_goals')` — deliberately **not** stacked with `PlanGuard`/`@RequiresPlan`, unlike
+  Church Calendar's own admin controller; see the plan-gating note below): cycle CRUD, the cross-department
+  goal list, a goal correction endpoint (`IN_PROGRESS` only, always audit-logged as
+  `DEPARTMENT_GOAL_CORRECTED`), the church-rating endpoint, and the per-department report.
+- `DepartmentGoalMemberController` (`department-goals/member`, `JwtAuthGuard`, same `@RequiresModule`): the
+  `current` read endpoint plus HOD-only goal CRUD, self-rating, goal-history (audit log filtered to that goal,
+  scoped to the goal's own department's lead — "the HOD can see that history... not discover secondhand"), and
+  the PDF export, all nested under `cycles/:cycleId/departments/:departmentId/...` so the department a write
+  targets is always explicit in the URL rather than inferred from "the member's one department."
+
+**Plan gating — one deliberate deviation from the Church Calendar precedent.** Church Calendar stacks
+`ModuleEnabledGuard` **and** `PlanGuard` together. `PlanGuard` checks `features.includes(required)` only and
+never consults `Tenant.moduleOverrides`, while `ModuleEnabledGuard` does — so a platform-admin comp override
+for a non-Pro tenant would still 403 through `PlanGuard` alone. Since Department Goals has no numeric usage
+cap to justify `PlanGuard`'s extra check (no `@CountsTowardLimit` use case), both controllers here use
+**`ModuleEnabledGuard` alone** — plan membership is still resolved through it, just without the second guard's
+override-blind failure mode.
+
+- `AdminPermission.DEPARTMENT_GOALS_READ`/`WRITE`, a new `Department Goals` permission group.
+- `KNOWN_MODULES` key `department_goals`.
+- `PlanFeature.DEPARTMENT_GOALS`, added to all four Pro plan variants' `features` by
+  `AddDepartmentGoalsToProPlans1794081600000` (same all-four-variants shape as `AddChurchCalendarToProPlans`).
+- `GrantDepartmentGoalsPermissions1797231600000` backfills `department_goals:read`/`write` onto every existing
+  tenant's `SuperAdmin` role, in the same migration wave as the table creation — not a later follow-up fix, the
+  mistake `GrantPagesPermissions` had to correct after ship.
+
+**PDF export** (`PdfService.generateDepartmentGoalReport`/`drawDepartmentGoalReport`) — one more `draw*` method
+alongside the session/event/giving-statement reports already there, a single goals table (Goal / Self Rating /
+Church Rating) for the HOD's own department at the same visibility rules `getCurrentForMember` already applies
+(a rating column reads `—` for exactly the same reason it would be `null` in the member API — not yet both
+submitted — so the export can never leak a one-sided score either).
+
+**Frontend surfaces.** discuva-admin gets a new top-level `Department Goals` nav entry (under People, next to
+Departments) with three screens: a cycle list + create panel (`app/department-goals/`, same list+panel shape as
+Games/Departments), a cycle detail page (per-department goal breakdown, the correction affordance in
+`IN_PROGRESS`, the church-rating form in `REVIEWED`, and a "move grace deadline"/deactivate control), and a
+report page reusing `components/charts/bar-chart.tsx` exactly as the attendance leaderboard does. discuva-member
+gets a single new screen (`components/layout/department-goals.tsx`, linked as a new card from the existing
+`/department-summary` page) showing every department relevant to the caller at their role's visibility: a live
+editable goal list for the HOD during `OPENING` (add/edit/remove, reusing the `LeaveCard`-style
+editable-vs-read-only split), a locked read-only list during `IN_PROGRESS`, and the per-goal reveal plus a
+self-rating form once `REVIEWED`. The PDF download button ports discuva-admin's existing blob-download pattern
+(`URL.createObjectURL` + `<a download>`) into discuva-member for the first time — that pattern didn't exist
+there before this.
+
+**discuva-member polish pass, done directly against the first version of this screen:** the delete-goal
+confirmation used `window.confirm()` in the initial cut — replaced with the app's shared `ConfirmModal`
+(`components/ui/confirm-modal.tsx`), the same component the Games/front-desk leave-guard work already
+established as the one confirmation pattern this app uses. The self-rating input was a `<select>` — replaced
+with a row of five tappable number buttons (thumb-friendly touch targets, no native picker chrome). Every
+mutation (add/edit/remove a goal, submit a rating) previously refetched `GET .../member/current` through the
+same `isLoading` flag the page's *initial* load uses, which re-collapsed the whole page back to its loading
+skeleton after every small action — fixed by gating the skeleton on `isLoading && !data` instead of `isLoading`
+alone, so a background refetch just swaps in fresh data over what's already on screen. Added a days-remaining
+line under the stage badge during `OPENING` ("Goal-writing closes in N days") and `IN_PROGRESS` ("review begins
+in N days") — the cycle is inherently time-boxed and the UI gave no sense of how much of the window was left.
+
+**Header redesigned to match Department Summary — reported as feeling "disconnected."** The screen originally
+opened with a plain flat header (small back arrow, text eyebrow, title), modeled after `front-desk-session.tsx`
+— the wrong precedent: that screen is a live-operating console, deliberately minimal since you're mid-task, not
+a browse/manage destination screen like this one. Landing here immediately after Department Summary's full-bleed
+hero (the only way into this screen — via the card there) read as leaving the department-management flow
+entirely. Now uses the same hero treatment as `department-summary.tsx` (`h-[40vh]` image, dark overlay, overlaid
+back button and title) — and deliberately reuses Department Summary's own image (`teamwork-hands-unity`) rather
+than a new asset, since the shared image is what actually reads as "still the same flow," not merely "also has a
+hero."
+
+**Same fix applied to `games-history.tsx`** — an app-wide audit for this exact pattern (a browse/destination
+screen, one tap from an already-hero'd screen, itself flat) found one other real instance: Game History, reached
+from Games' own join screen (`games-join.tsx`, hero key `game-backdrop`). Now shares that same image, for the
+same reason. Everything else without a hero survived the audit as legitimately flat by an already-consistent
+convention, not an oversight — detail pages drilled into from an already-hero'd list (`announcement-detail.tsx`,
+`event-detail.tsx`, `sermon-detail.tsx`) and live/operational "in the moment" screens (`front-desk-session.tsx`,
+`game-session.tsx`, `my-live-assignment.tsx`, `small-group-attendance.tsx`) don't get one, deliberately — a
+detail view's own content is the point, not a repeated generic photo, and an operational screen mid-task needs
+its vertical space for what's actually live, not a static image.
+
+**`order-of-service.tsx`'s hero was missing its title in the empty state.** An earlier fix here correctly removed
+a "This Week" placeholder title that read as an answer ("here's this week's service") even when nothing was
+actually scheduled, contradicting the "No service scheduled" message rendered just below it — but the fix
+removed the `<h1>` entirely rather than giving it a neutral fallback, leaving the hero with only its small
+eyebrow line and nothing else whenever `programme` has no name, thinner than every other hero'd page's
+consistent eyebrow-plus-title pair. Fixed by falling back to the eyebrow's own text ("Order of Service") as the
+title instead of hiding it — asserts nothing about whether a service is scheduled, but still fills the slot.
+
+**discuva-admin: the New Cycle button gave no reason for staying disabled on an invalid date order.** Reported
+live: entering a `graceDeadline` before `startDate` (or an `endDate` before `graceDeadline`) left "Open Cycle"
+permanently greyed out with zero explanation — nothing distinguished "you haven't finished the form" from "what
+you entered is contradictory." Fixed with the same `blockReason` pattern `church-calendar/page.tsx`'s own
+date-range form already established: a specific message ("The opening window can't close before it starts...")
+rendered as an amber inline hint above the button, replacing the bare boolean `valid` check. Also added `min`
+attributes to the Opening Window Closes / Cycle Ends date inputs (`min={draft.startDate}` /
+`min={draft.graceDeadline}`) so the browser's own date picker discourages the invalid combination before the
+admin even finishes picking, mirroring the `minDate`/`maxDate` props Church Calendar's date-range picker already
+uses for the same purpose.
+
+**discuva-member: two real gaps found and fixed in the More grid.** First, an inconsistency — Leave Request and
+Evangelism are worker-gated tiles (`components/layout/profile.tsx`'s `ministryTiles`, only rendered when
+`isWorker`) exactly like Prayer Roster, but only Prayer Roster carried the `badge: "Workers"` label communicating
+that restriction; the other two now do too. Second, and more substantial: **plain department members had no way
+to reach Department Goals at all.** The only entry point was the card on Department Summary — itself one of the
+`leadershipTiles`, gated `isHod` (which, per `AuthService.getProfile`, is actually true for both HOD *and*
+Deputy-HOD, since it's `departmentLeadRepo.exists({ workerProfile })` with no `leadType` filter — so Deputy-HODs
+already had a path). A regular department member has neither role, so despite the backend (`getCurrentForMember`)
+and the page itself both already handling a plain-member "read-only, revealed at the right stage" view correctly,
+there was no door into it. Fixed by adding "Department Goals" as its own tile directly in `ministryTiles` (open
+to every worker, `badge: "Workers"`, `moduleKey: "department_goals"`) — the HOD-only write tools (Dept.
+Attendance/Summary) stay exactly where they were, under Leadership.
+
+**`help.tsx`'s Department Goals FAQ category was still `isHod`-only**, gating it behind a role that no longer
+matches who can actually reach the feature — broadened to `isWorker`, badge changed to "Workers" to match the
+tile, and a new Q&A ("I'm not the HOD — what do I see?") added specifically for the plain-member read-only
+experience, alongside the existing HOD-facing questions (same "one category, mixed relevance per question"
+shape the pre-existing Evangelism category already uses).
+
+**discuva-admin's own `ConfirmModal` (`components/ui/confirm-modal.tsx`) is now applied everywhere**, not just the
+five screens it already covered — the Department Goals work above surfaced that this app had a working shared
+confirm-dialog component that most of its own destructive actions still bypassed in favor of `window.confirm()`.
+Swept and converted every remaining instance: Games (delete question, end session — both the list page and the
+detail page), Pages (unpublish, delete), Sermons (delete), Church Calendar (delete), and Forms (delete). Each
+conversion follows the same shape already established by `facility-rental`/`service-programme`/etc.: a
+`confirm*` state (boolean or holding the pending record) gates the modal's render, the original handler drops
+its `window.confirm()` guard and becomes the `onConfirm` callback, and the button that used to call the handler
+directly now just opens the confirm state. `window.confirm()` no longer appears anywhere in discuva-admin.
+
+**`app/department-goals/layout.tsx`** — every feature directory in discuva-admin needs its own `layout.tsx`
+wrapping `<Shell>` (the sidebar, topbar, and help button); the three page files were initially added without one,
+so the route rendered with no chrome at all. Fixed by copying the exact one-line pattern `app/games/layout.tsx`/
+`app/departments/layout.tsx` already use — Next.js layouts apply to everything nested under them, so this single
+file covers all three Department Goals routes.
+
+**Help/FAQ coverage.** discuva-admin's contextual help (`components/layout/help-system.tsx`, the `?` button's
+per-page tips) gained a `/department-goals` entry alongside Departments/Games/Church Calendar, plus a one-word
+addition to the People section's welcome-tour blurb. discuva-member's Help page
+(`components/layout/help.tsx`) gained a new "Department Goals" FAQ category, gated `visible: isHod &&
+isModuleEnabled("department_goals")` — deliberately its own category rather than folded into the existing
+"Department Leadership" one, since Dept. Summary/Finance Requests/Pastor Feedback aren't module-gated at all and
+folding a Pro-plan-gated feature's FAQ into an always-visible category would show HODs on non-Pro tenants
+questions about a feature they can't reach.
+
+| Method | Route | Auth | Notes |
+|--------|-------|------|-------|
+| POST   | `/department-goals/cycles`                              | AdminGuard (DEPARTMENT_GOALS_WRITE) | Create a cycle |
+| GET    | `/department-goals/cycles`                              | AdminGuard (DEPARTMENT_GOALS_READ)  | List all cycles — unpaginated |
+| PATCH  | `/department-goals/cycles/:id`                          | AdminGuard (DEPARTMENT_GOALS_WRITE) | Edit dates (incl. moving `graceDeadline` anytime — re-validated), toggle `isActive` |
+| GET    | `/department-goals/cycles/:id/goals`                    | AdminGuard (DEPARTMENT_GOALS_READ)  | Cross-department goal list for the cycle |
+| PATCH  | `/department-goals/cycles/:id/goals/:goalId`            | AdminGuard (DEPARTMENT_GOALS_WRITE) | Church correction — `IN_PROGRESS` only, audit-logged |
+| POST   | `/department-goals/cycles/:id/goals/:goalId/church-rating` | AdminGuard (DEPARTMENT_GOALS_WRITE) | Write-once, `REVIEWED` only |
+| GET    | `/department-goals/cycles/:id/report`                   | AdminGuard (DEPARTMENT_GOALS_READ)  | Per-department avg self/church score + the gap |
+| GET    | `/department-goals/member/current`                      | JwtAuthGuard (member+worker)        | Every department relevant to the caller, at their role's visibility |
+| POST   | `/department-goals/member/cycles/:cycleId/departments/:departmentId/goals`            | JwtAuthGuard (HOD only) | `OPENING` only |
+| PATCH  | `/department-goals/member/cycles/:cycleId/departments/:departmentId/goals/:goalId`    | JwtAuthGuard (HOD only) | `OPENING` only, frozen once rated |
+| DELETE | `/department-goals/member/cycles/:cycleId/departments/:departmentId/goals/:goalId`    | JwtAuthGuard (HOD only) | `OPENING` only, frozen once rated |
+| POST   | `/department-goals/member/cycles/:cycleId/departments/:departmentId/goals/:goalId/self-rating` | JwtAuthGuard (HOD only) | Write-once, `REVIEWED` only |
+| GET    | `/department-goals/member/cycles/:cycleId/departments/:departmentId/goals/:goalId/history` | JwtAuthGuard (dept. lead only) | Audit log, filtered to `DEPARTMENT_GOAL_CORRECTED` for this goal |
+| GET    | `/department-goals/member/cycles/:cycleId/departments/:departmentId/pdf`              | JwtAuthGuard (HOD only) | `application/pdf` download |
 
 ### Social Media Module (`src/social-media/`)
 

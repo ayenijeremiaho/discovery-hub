@@ -69,6 +69,7 @@ import { BranchModule } from './branch/branch.module';
 import { FormsModule } from './forms/forms.module';
 import { PagesModule } from './pages/pages.module';
 import { ChurchCalendarModule } from './church-calendar/church-calendar.module';
+import { DepartmentGoalModule } from './department-goal/department-goal.module';
 import { SocialMediaModule } from './social-media/social-media.module';
 import { MemberDirectoryModule } from './member-directory/member-directory.module';
 
@@ -248,6 +249,7 @@ import { MemberDirectoryModule } from './member-directory/member-directory.modul
     FormsModule,
     PagesModule,
     ChurchCalendarModule,
+    DepartmentGoalModule,
     SocialMediaModule,
     MemberDirectoryModule,
     EnumsModule,

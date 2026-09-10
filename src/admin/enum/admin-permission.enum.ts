@@ -85,6 +85,8 @@ export enum AdminPermission {
   MEMBER_DIRECTORY_READ = 'member_directory:read',
   CHURCH_CALENDAR_READ = 'church_calendar:read',
   CHURCH_CALENDAR_WRITE = 'church_calendar:write',
+  DEPARTMENT_GOALS_READ = 'department_goals:read',
+  DEPARTMENT_GOALS_WRITE = 'department_goals:write',
 }
 
 export const AdminPermissionLabels: Record<AdminPermission, string> = {
@@ -174,6 +176,8 @@ export const AdminPermissionLabels: Record<AdminPermission, string> = {
   [AdminPermission.MEMBER_DIRECTORY_READ]: 'View Member Directory Analytics',
   [AdminPermission.CHURCH_CALENDAR_READ]: 'View Church Calendar',
   [AdminPermission.CHURCH_CALENDAR_WRITE]: 'Build & Manage Church Calendar',
+  [AdminPermission.DEPARTMENT_GOALS_READ]: 'View Department Goals',
+  [AdminPermission.DEPARTMENT_GOALS_WRITE]: 'Manage Department Goal Cycles',
 };
 
 export const AdminPermissionDescriptions: Record<AdminPermission, string> = {
@@ -336,6 +340,10 @@ export const AdminPermissionDescriptions: Record<AdminPermission, string> = {
     'View the monthly/yearly programme calendar and its entries',
   [AdminPermission.CHURCH_CALENDAR_WRITE]:
     'Create, edit, publish, and delete programme calendars and their entries',
+  [AdminPermission.DEPARTMENT_GOALS_READ]:
+    "View department goal cycles, every department's goals, and the cross-department rating report",
+  [AdminPermission.DEPARTMENT_GOALS_WRITE]:
+    "Open and manage goal cycles, correct a goal mid-cycle, and submit the church's rating",
 };
 
 export interface AdminPermissionGroupItem {
@@ -573,6 +581,14 @@ export const AdminPermissionGroups: AdminPermissionGroup[] = [
       AdminPermission.CHURCH_CALENDAR_WRITE,
     ],
     'church_calendar',
+  ),
+  buildGroup(
+    'Department Goals',
+    [
+      AdminPermission.DEPARTMENT_GOALS_READ,
+      AdminPermission.DEPARTMENT_GOALS_WRITE,
+    ],
+    'department_goals',
   ),
   buildGroup('System', [
     AdminPermission.DASHBOARD_READ,

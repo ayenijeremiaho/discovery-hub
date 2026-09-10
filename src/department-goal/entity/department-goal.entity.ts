@@ -1,0 +1,71 @@
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
+import { BaseEntity } from '../../utility/entity/base.entity';
+import { DepartmentGoalCycle } from './department-goal-cycle.entity';
+import { Department } from '../../department/entity/department.entity';
+import { Admin } from '../../admin/entity/admin.entity';
+import { Member } from '../../member/entity/member.entity';
+
+@Entity({ name: 'department_goals' })
+export class DepartmentGoal extends BaseEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Index()
+  @ManyToOne(() => DepartmentGoalCycle, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'cycle_id' })
+  cycle: DepartmentGoalCycle;
+
+  // RESTRICT, not CASCADE — this is a compliance record; department
+  // deletion should be blocked by existing goal history rather than
+  // silently erasing it (department deletion is already blocked elsewhere
+  // in this codebase whenever workers are still assigned, for the same
+  // reason).
+  @Index()
+  @ManyToOne(() => Department, { nullable: false, onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'department_id' })
+  department: Department;
+
+  @Column()
+  title: string;
+
+  @Column({ type: 'text', nullable: true })
+  description: string | null;
+
+  // Frozen the instant either rating is set — enforced in
+  // DepartmentGoalService, not a DB constraint (see assertNotFrozen).
+  @Column({ name: 'church_rating', type: 'smallint', nullable: true })
+  churchRating: number | null;
+
+  @Column({ name: 'church_rating_reason', type: 'text', nullable: true })
+  churchRatingReason: string | null;
+
+  @Column({ name: 'church_rated_at', type: 'timestamptz', nullable: true })
+  churchRatedAt: Date | null;
+
+  @ManyToOne(() => Admin, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'church_rated_by_admin_id' })
+  churchRatedByAdmin: Admin | null;
+
+  @Column({ name: 'self_rating', type: 'smallint', nullable: true })
+  selfRating: number | null;
+
+  @Column({ name: 'self_rating_reason', type: 'text', nullable: true })
+  selfRatingReason: string | null;
+
+  @Column({ name: 'self_rated_at', type: 'timestamptz', nullable: true })
+  selfRatedAt: Date | null;
+
+  @ManyToOne(() => Member, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'self_rated_by_member_id' })
+  selfRatedByMember: Member | null;
+}

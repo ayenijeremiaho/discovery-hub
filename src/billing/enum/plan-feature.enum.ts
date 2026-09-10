@@ -18,4 +18,5 @@ export enum PlanFeature {
   FORMS = 'forms',
   MEMBER_DIRECTORY = 'member_directory',
   CHURCH_CALENDAR = 'church_calendar',
+  DEPARTMENT_GOALS = 'department_goals',
 }

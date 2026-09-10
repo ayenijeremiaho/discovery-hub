@@ -36,6 +36,24 @@ interface PdfBranding {
   currencyLocale: string;
 }
 
+// The HOD's own department, at the visibility rules already applied by
+// DepartmentGoalService.toGoalView — a rating is null here for exactly the
+// same reason it would be null in the member API response (not yet both
+// submitted), so this export can never leak a one-sided score either.
+export interface DepartmentGoalPdfReport {
+  departmentName: string;
+  cycleName: string;
+  stage: string;
+  goals: {
+    title: string;
+    description: string | null;
+    selfRating: number | null;
+    selfRatingReason: string | null;
+    churchRating: number | null;
+    churchRatingReason: string | null;
+  }[];
+}
+
 // One row of a member's Giving Statement — merges TitheRecord (Tithe/
 // Offering/General Giving/a GivingOption) and CONFIRMED PledgeContribution
 // (pledge-designated gifts) into a single normalized shape, since the two
@@ -178,6 +196,19 @@ export class PdfService {
       format: 'a4',
     });
     this.drawEventProgramme(doc, event, sections, branding);
+    return Buffer.from(doc.output('arraybuffer'));
+  }
+
+  async generateDepartmentGoalReport(
+    report: DepartmentGoalPdfReport,
+  ): Promise<Buffer> {
+    const branding = await this.resolveBranding();
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    });
+    this.drawDepartmentGoalReport(doc, report, branding);
     return Buffer.from(doc.output('arraybuffer'));
   }
 
@@ -1628,5 +1659,52 @@ export class PdfService {
 
   private cap(str: string): string {
     return str ? str.charAt(0).toUpperCase() + str.slice(1).toLowerCase() : '';
+  }
+
+  // ─── Department goal report ──────────────────────────────────────────────
+
+  private drawDepartmentGoalReport(
+    doc: jsPDF,
+    report: DepartmentGoalPdfReport,
+    branding: PdfBranding,
+  ): void {
+    let y = this.drawPageHeader(doc, 'Department Goals', branding);
+    y = this.drawAccentBand(
+      doc,
+      y,
+      report.departmentName,
+      report.cycleName,
+      'Stage',
+      this.cap(report.stage),
+    );
+    y += 4;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: MARGIN, right: MARGIN },
+      head: [['Goal', 'Self Rating', 'Church Rating']],
+      body: report.goals.map((g) => [
+        g.description ? `${g.title}\n${g.description}` : g.title,
+        g.selfRating !== null
+          ? `${g.selfRating}/5${g.selfRatingReason ? ` — ${g.selfRatingReason}` : ''}`
+          : '—',
+        g.churchRating !== null
+          ? `${g.churchRating}/5${g.churchRatingReason ? ` — ${g.churchRatingReason}` : ''}`
+          : '—',
+      ]),
+      columnStyles: {
+        0: { cellWidth: CONTENT_W * 0.5 },
+        1: { cellWidth: CONTENT_W * 0.25 },
+        2: { cellWidth: CONTENT_W * 0.25 },
+      },
+      headStyles: {
+        fillColor: ACCENT,
+        textColor: DARK,
+        fontStyle: 'bold',
+        fontSize: 9,
+      },
+      bodyStyles: { fontSize: 8.5, textColor: DARK, fillColor: WHITE },
+      alternateRowStyles: { fillColor: LIGHT_GOLD },
+    });
   }
 }

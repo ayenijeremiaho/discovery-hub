@@ -42,6 +42,11 @@ export const KNOWN_MODULES = [
   { key: 'member_directory', moduleName: 'Member Directory', required: false },
   { key: 'church_calendar', moduleName: 'Church Calendar', required: false },
   {
+    key: 'department_goals',
+    moduleName: 'Department Goals',
+    required: false,
+  },
+  {
     key: 'youtube_integration',
     moduleName: 'YouTube Integration',
     required: false,

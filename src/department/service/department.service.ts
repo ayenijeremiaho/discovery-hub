@@ -274,6 +274,53 @@ export class DepartmentService {
     return lead?.department?.id ?? null;
   }
 
+  // Scoped to a SPECIFIC department, unlike getDepartmentIdForLead above
+  // (which resolves "the" department for a member via an arbitrary
+  // findOne and is not safe to reuse for authorization — a member can lead
+  // more than one department, since DepartmentLead has no uniqueness
+  // constraint on workerProfile, only on (department, leadType)). Callers
+  // needing "is this member allowed to act on department X" must use this,
+  // not getDepartmentIdForLead.
+  async assertIsDepartmentLead(
+    memberId: string,
+    departmentId: string,
+    leadType?: DepartmentLeadTypeEnum,
+  ): Promise<DepartmentLead> {
+    const lead = await this.leadRepository.findOne({
+      where: {
+        workerProfile: { member: { id: memberId } },
+        department: { id: departmentId },
+        ...(leadType ? { leadType } : {}),
+      },
+      relations: ['department'],
+    });
+    if (!lead) {
+      throw new ForbiddenException('You are not a lead of this department.');
+    }
+    return lead;
+  }
+
+  // Every department a member leads (HOD or Deputy-HOD) — a member can lead
+  // more than one, so this returns a list rather than assuming one, unlike
+  // getDepartmentIdForLead.
+  async getLeadRoles(memberId: string): Promise<
+    {
+      departmentId: string;
+      departmentName: string;
+      leadType: DepartmentLeadTypeEnum;
+    }[]
+  > {
+    const leads = await this.leadRepository.find({
+      where: { workerProfile: { member: { id: memberId } } },
+      relations: ['department'],
+    });
+    return leads.map((l) => ({
+      departmentId: l.department.id,
+      departmentName: l.department.name,
+      leadType: l.leadType,
+    }));
+  }
+
   async getWorkersInDepartment(departmentId: string): Promise<WorkerProfile[]> {
     return this.workerProfileRepository.find({
       where: { department: { id: departmentId } },
