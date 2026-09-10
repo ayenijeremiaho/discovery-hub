@@ -3296,6 +3296,16 @@ here. This backend only ever knows what's been explicitly overridden.
   asset, reverting that screen to the app's bundled default. A no-op (still `200`, still deletes nothing) if no
   override existed for that key.
 
+**discuva-member: public-link routes vs. "the app" (`components/pwa/standalone-gate.tsx`).** `PUBLIC_LINK_ROUTE_PREFIXES`
+(`/forms/public/`, `/classes/guest/`, `/p/`) is the fixed list of routes explicitly designed to be reachable by
+anyone with the link — no account, no installed app (a QR-scanned public form, a guest class portal, a public
+page). `StandaloneGate` (mounted above the whole app in `app/layout.tsx`) already exempts these from the
+"install this app first" wall for exactly that reason. `UpdateBanner` (same layout, "a new version of the app
+is ready") had the identical gap and no exemption at all — reported live: it makes no sense to someone who just
+opened a shared link and was never "in the app" to begin with. Fixed by exporting the same prefix check
+(`isPublicLinkRoute`) from `standalone-gate.tsx` and reusing it in `update-banner.tsx`, rather than maintaining
+a second list that could quietly drift out of sync with the first.
+
 `TenantAssetOverride` lives in `public` (`tenant_asset_overrides`, FK to `tenants.id` `ON DELETE CASCADE`), not a
 per-tenant schema — this is the same category of data as `Tenant.logoUrl` (self-service branding a church sets
 once and rarely touches), not operational data needing schema isolation. One row per `(tenant, assetKey)`,
@@ -4250,6 +4260,18 @@ since there's no meaningful aggregate for free text. Blank/null/undefined answer
 `responseCount` and every computation — a field added after some submissions already exist doesn't drag its
 stats toward zero.
 
+**discuva-admin UX: search/filter on the list, and a "More Options" disclosure on each field.** Both were
+client-side additions — `GET /forms` was already, and stays, a plain unpaginated `find()` (see the Departments
+Module's own pagination-policy note: admin-authored reference data like this doesn't grow unboundedly the way
+members/attendance/audit logs do, so backend search+pagination would trade an instant, zero-network filter for a
+network round-trip per keystroke at a scale this data doesn't reach). `app/forms/page.tsx` gained a search box
+(title/description) plus Visibility/Status filters over the already-fetched list. `app/forms/field-editor.tsx`'s
+per-field editor gained a collapsible "More Options" section (helper text, length/selection bounds, the
+validation pattern, and the conditional-visibility rule) — collapsed by default with a small dot indicator when
+a field already has any of that configured, so a form with several fields doesn't turn into a long scroll of
+mostly-unused optional settings. The field's actual content (label, type, and its options for
+`DROPDOWN`/`CHECKBOX`) stays always visible — only the advanced/optional settings collapse.
+
 ### Pages (`src/pages/`)
 
 Per-church public web pages — a homepage or a shareable landing page (e.g. a conference page), assembled from a
@@ -4949,6 +4971,15 @@ treatment — `notFound()` already produces a real 404, which no crawler indexes
 | GET    | `/pages/public/:slug`       | Public, `404` unless `isPublished` | Returns the full `PublicPageDto` (`theme`/`accentColor`/`backgroundColor`/`fontFamily`) — every section verbatim including its optional `style`, except any section with `hidden: true` (dropped from the array entirely) |
 | GET    | `/pages/public/:slug/preview` | Public, `?token=` must match `previewToken` | Same `PublicPageDto` shape (hidden sections filtered the same way), sourced from `draft*` — no `isPublished` check |
 | POST   | `/pages/public/:slug/testimonials` | Public, rate-limited (5/min) | Body `{ sectionId, quote, name? }`. `202`, no content. Lands `PENDING` — rejected outright unless `sectionId` is a `TESTIMONIALS` section on this page with `acceptSubmissions` on |
+
+**discuva-admin UX: same client-side search/filter and disclosure pattern as Forms, for the same reasons**
+(`GET /pages` is likewise a plain unpaginated `find()`, likewise admin-authored reference data). `app/pages/page.tsx`'s
+list gained a search box (title/slug) plus a Published/Draft status filter. `app/pages/sections-editor.tsx`
+already collapsed each *section* by default (`collapsedIds`, pre-existing) — but `SectionStyleControls`
+(Layout/Alignment/Columns/Size/Accent Color/Spacing, up to six sub-controls depending on the section type) was
+always rendered in full the moment a section was expanded, reproducing the same long-scroll problem one level
+deeper. Now collapsed behind its own "Style" toggle, same dot-indicator-when-already-configured treatment as
+Forms' field editor.
 
 ### Church Calendar (`src/church-calendar/`)
 
