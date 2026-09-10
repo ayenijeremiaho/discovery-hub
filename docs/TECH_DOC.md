@@ -4272,6 +4272,15 @@ a field already has any of that configured, so a form with several fields doesn'
 mostly-unused optional settings. The field's actual content (label, type, and its options for
 `DROPDOWN`/`CHECKBOX`) stays always visible — only the advanced/optional settings collapse.
 
+**Filter `<select>` styling, reported live as looking out of place** — the Visibility/Status filters initially
+used the browser's native `<select>` chevron, which clashed against the custom-styled search box right next to
+it. Every other `<select>` elsewhere in discuva-admin uses `appearance-none` to strip that native arrow, but
+none of them replace it with anything, leaving a box with no visible dropdown indicator at all — not a pattern
+worth copying as-is. Fixed with `appearance-none` plus an actual `ChevronDown` icon positioned absolutely inside
+a wrapping `relative` div (`pointer-events-none` so it doesn't intercept the click) — a small, deliberate
+improvement on the app-wide convention rather than a match to it, applied here and to the equivalent filter on
+the Pages list below.
+
 ### Pages (`src/pages/`)
 
 Per-church public web pages — a homepage or a shareable landing page (e.g. a conference page), assembled from a
