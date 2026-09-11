@@ -1,9 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { getQueueToken } from '@nestjs/bull';
 import { ClsService } from 'nestjs-cls';
 import { TransactionHost } from '@nestjs-cls/transactional';
 import { ConfigService } from '@nestjs/config';
-import { TenantProvisioningService } from './tenant-provisioning.service';
+import {
+  TenantProvisioningService,
+  TENANT_PROVISIONING_QUEUE,
+  TENANT_PROVISIONING_JOB,
+} from './tenant-provisioning.service';
 import { Tenant } from '../entity/tenant.entity';
 import { Subscription } from '../../billing/entity/subscription.entity';
 import { Member } from '../../member/entity/member.entity';
@@ -11,10 +16,13 @@ import { UtilityService } from '../../utility/service/utility.service';
 import { TenantOnboardingEvent } from '../entity/tenant-onboarding-event.entity';
 import { TenantOnboardingStatus } from '../enum/tenant-onboarding-status.enum';
 import { TenantOnboardingActorType } from '../enum/tenant-onboarding-actor-type.enum';
+import { PlatformAdmin } from '../../platform-admin/entity/platform-admin.entity';
+import { PlatformAdminPermission } from '../../platform-admin/enum/platform-admin-permission.enum';
 
 const mockTenantRepo = {
   findOneBy: jest.fn(),
   save: jest.fn(),
+  update: jest.fn(),
   create: jest.fn((v) => v),
 };
 const mockSubscriptionRepo = {
@@ -26,12 +34,16 @@ const mockEventRepo = {
   save: jest.fn(),
   create: jest.fn((v) => v),
 };
+const mockPlatformAdminRepo = { find: jest.fn() };
+const mockProvisioningQueue = { add: jest.fn() };
 const mockDataSource = { query: jest.fn() };
 const mockUtilityService = { sendEmailWithTemplate: jest.fn() };
 const mockConfigService = {
-  get: jest.fn((key: string) =>
-    key === 'ADMIN_LOGIN_URL' ? 'https://admin.example.com' : 'Discuva',
-  ),
+  get: jest.fn((key: string) => {
+    if (key === 'ADMIN_LOGIN_URL') return 'https://admin.example.com';
+    if (key === 'PLATFORM_LOGIN_URL') return 'https://platform.example.com';
+    return 'Discuva';
+  }),
 };
 
 // Real runWith/withTransaction set up AsyncLocalStorage + a DB transaction —
@@ -81,6 +93,14 @@ describe('TenantProvisioningService', () => {
           provide: getRepositoryToken(TenantOnboardingEvent),
           useValue: mockEventRepo,
         },
+        {
+          provide: getRepositoryToken(PlatformAdmin),
+          useValue: mockPlatformAdminRepo,
+        },
+        {
+          provide: getQueueToken(TENANT_PROVISIONING_QUEUE),
+          useValue: mockProvisioningQueue,
+        },
         { provide: ClsService, useValue: mockCls },
         { provide: TransactionHost, useValue: mockTxHost },
         { provide: UtilityService, useValue: mockUtilityService },
@@ -95,6 +115,9 @@ describe('TenantProvisioningService', () => {
     );
     mockSubscriptionRepo.findOneBy.mockResolvedValue(null);
     mockDataSource.query.mockResolvedValue(undefined);
+    mockTenantRepo.update.mockResolvedValue(undefined);
+    mockPlatformAdminRepo.find.mockResolvedValue([]);
+    mockProvisioningQueue.add.mockResolvedValue(undefined);
   });
 
   // provision() itself creates a real, unmocked DataSource inside
@@ -314,6 +337,101 @@ describe('TenantProvisioningService', () => {
       expect(mockEventRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ actorId: null, metadata: null }),
       );
+    });
+  });
+
+  describe('enqueueProvisioning', () => {
+    it('adds a job to the provisioning queue with the given payload', async () => {
+      const jobData = {
+        tenantId: 'tenant-1',
+        subdomain: 'test-church',
+        churchName: 'Test Church',
+        adminFirstname: 'Ada',
+        adminLastname: 'Min',
+        adminEmail: 'admin@test-church.org',
+        actorType: TenantOnboardingActorType.SELF_SERVE,
+      };
+
+      await service.enqueueProvisioning(jobData);
+
+      expect(mockProvisioningQueue.add).toHaveBeenCalledWith(
+        TENANT_PROVISIONING_JOB,
+        jobData,
+      );
+    });
+  });
+
+  describe('holdForApproval', () => {
+    const pendingParams = {
+      adminFirstname: 'Ada',
+      adminLastname: 'Min',
+      adminEmail: 'admin@test-church.org',
+      planId: 'free',
+    };
+
+    it('sets the tenant AWAITING_APPROVAL and persists the pending signup params', async () => {
+      await service.holdForApproval(baseTenant, pendingParams);
+
+      expect(mockTenantRepo.update).toHaveBeenCalledWith('tenant-1', {
+        onboardingStatus: TenantOnboardingStatus.AWAITING_APPROVAL,
+        pendingSignupParams: pendingParams,
+      });
+    });
+
+    it('records an AWAITING_APPROVAL event attributed to SELF_SERVE', async () => {
+      await service.holdForApproval(baseTenant, pendingParams);
+
+      expect(mockEventRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'AWAITING_APPROVAL',
+          actorType: TenantOnboardingActorType.SELF_SERVE,
+        }),
+      );
+    });
+
+    it('emails only platform admins with TENANTS_WRITE, not every active admin', async () => {
+      mockPlatformAdminRepo.find.mockResolvedValue([
+        {
+          email: 'can-write@example.com',
+          isActive: true,
+          platformAdminRole: {
+            permissions: [PlatformAdminPermission.TENANTS_WRITE],
+          },
+        },
+        {
+          email: 'read-only@example.com',
+          isActive: true,
+          platformAdminRole: {
+            permissions: [PlatformAdminPermission.TENANTS_READ],
+          },
+        },
+      ]);
+
+      await service.holdForApproval(baseTenant, pendingParams);
+      // notifyPlatformAdminsOfPendingApproval fires the query fire-and-forget
+      await new Promise(process.nextTick);
+
+      expect(mockUtilityService.sendEmailWithTemplate).toHaveBeenCalledTimes(1);
+      expect(mockUtilityService.sendEmailWithTemplate).toHaveBeenCalledWith(
+        'can-write@example.com',
+        expect.stringContaining(baseTenant.name),
+        'tenant-approval-needed',
+        expect.objectContaining({
+          church_name: baseTenant.name,
+          subdomain: baseTenant.subdomain,
+          admin_name: 'Ada Min',
+          admin_email: pendingParams.adminEmail,
+          review_url: 'https://platform.example.com/tenants',
+        }),
+      );
+    });
+
+    it('does not throw when the admin-notification query itself fails', async () => {
+      mockPlatformAdminRepo.find.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.holdForApproval(baseTenant, pendingParams),
+      ).resolves.not.toThrow();
     });
   });
 });

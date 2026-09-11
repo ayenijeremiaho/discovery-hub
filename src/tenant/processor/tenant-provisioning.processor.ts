@@ -5,24 +5,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Tenant } from '../entity/tenant.entity';
 import { TenantOnboardingStatus } from '../enum/tenant-onboarding-status.enum';
-import { TenantOnboardingActorType } from '../enum/tenant-onboarding-actor-type.enum';
 import {
-  ProvisionTenantParams,
+  TENANT_PROVISIONING_QUEUE,
+  TENANT_PROVISIONING_JOB,
+  TenantProvisioningJobData,
   TenantProvisioningService,
 } from '../service/tenant-provisioning.service';
 import { BranchInviteService } from '../../branch/service/branch-invite.service';
-
-export const TENANT_PROVISIONING_QUEUE = 'tenant-provisioning';
-export const TENANT_PROVISIONING_JOB = 'provision';
-
-export interface TenantProvisioningJobData extends ProvisionTenantParams {
-  tenantId: string;
-  actorType: TenantOnboardingActorType;
-  actorId?: string;
-  // Signup-path only — consumed here (not the controller) since the
-  // controller no longer awaits provisioning to completion.
-  branchInviteToken?: string;
-}
 
 @Processor(TENANT_PROVISIONING_QUEUE)
 export class TenantProvisioningProcessor {
@@ -57,6 +46,7 @@ export class TenantProvisioningProcessor {
 
     await this.tenantRepo.update(tenant.id, {
       onboardingStatus: TenantOnboardingStatus.ACTIVE,
+      activatedAt: new Date(),
     });
     await this.provisioningService.recordEvent(
       tenant.id,

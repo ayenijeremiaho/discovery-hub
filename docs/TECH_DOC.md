@@ -1829,9 +1829,18 @@ itself is unchanged either way and still callable directly (the `provision:tenan
 idempotent (checks existing state before acting at every step), which is what makes it safe for the queue to retry
 and safe to re-run by hand after a synchronous failure.
 
-**`Tenant.onboardingStatus`** (`PENDING | PROVISIONING | ACTIVE | FAILED`) is orthogonal to `isActive` — `isActive`
+**`Tenant.onboardingStatus`** (`PENDING | AWAITING_APPROVAL | PROVISIONING | ACTIVE | FAILED`) is orthogonal to `isActive` — `isActive`
 still means "currently allowed to serve live traffic" (also flipped by `PlatformTenantService.suspendTenant`);
 `onboardingStatus` only ever moves forward through the lifecycle once and never changes on suspend/reactivate.
+
+**Deleting an invalid/incomplete signup:** `DELETE /platform/tenants/:id` (`PlatformTenantService.deleteTenant`,
+`TENANTS_DELETE` permission) is the only hard-delete path for a tenant, and it's deliberately narrow — only
+`PENDING` (never provisioned) or `FAILED` (provisioning attempt died) tenants qualify; an `ACTIVE` one, even later
+suspended, is refused with `409` since that's real church data. Drops the Postgres schema first (`DROP SCHEMA IF
+EXISTS "..." CASCADE`, safe as a no-op for a `PENDING` tenant that never reached `provision()`), then removes the
+`tenants` row, which cascades onboarding events/subscription/etc. via existing FKs. No automated sweep for
+abandoned signups exists yet — this is a manual action from the discuva-platform tenant detail panel, gated behind
+a "type the subdomain to confirm" step given it's the one irreversible tenant action.
 
 **Subdomain validation** happens inside `ensurePendingTenant`, before touching the database, against two separate
 blocklists — `403`/`409 ConflictException` either way, but for different reasons: `RESERVED_SUBDOMAINS`
@@ -1879,16 +1888,91 @@ fast enough that the admin can just wait for the response.
 `AuditLogService`, which is tenant-scoped (lives in each church's own schema, actor FKs to that tenant's own
 `Member`) and can't record an event from before/independent of any tenant schema existing. A small, purpose-built,
 `public`-schema table instead: `tenant` (FK, cascade), `event` (`SIGNUP_INITIATED | PLATFORM_ADMIN_INITIATED |
-PROVISIONING_STARTED | PROVISIONING_COMPLETED | PROVISIONING_FAILED`), `actorType` (`SELF_SERVE | PLATFORM_ADMIN |
-SYSTEM`), `actorId` (nullable — the platform admin's id when `actorType = PLATFORM_ADMIN`), `metadata` (nullable
-jsonb). Written via `TenantProvisioningService.recordEvent()` — no separate service, it's a simple insert-only log.
-Viewable per-tenant via `GET /platform/tenants/:id/onboarding-events` (`TENANTS_READ` permission). The
-platform-admin path never emits `PROVISIONING_STARTED` — there's no meaningful gap between "initiated" and
-"started" when both happen inline in the same request.
+AWAITING_APPROVAL | APPROVED | PROVISIONING_STARTED | PROVISIONING_COMPLETED | PROVISIONING_FAILED`), `actorType`
+(`SELF_SERVE | PLATFORM_ADMIN | SYSTEM`), `actorId` (nullable — the platform admin's id when `actorType =
+PLATFORM_ADMIN`), `metadata` (nullable jsonb). Written via `TenantProvisioningService.recordEvent()` — no separate
+service, it's a simple insert-only log. Viewable per-tenant via `GET /platform/tenants/:id/onboarding-events`
+(`TENANTS_READ` permission). The platform-admin path never emits `PROVISIONING_STARTED` — there's no meaningful gap
+between "initiated" and "started" when both happen inline in the same request.
 
-**Response shape:** `POST /signup` returns a `PENDING` tenant immediately (poll `GET /signup/:tenantId/status` for
-completion). `POST /platform/tenants` returns the tenant already `ACTIVE` — same shape `GET /platform/tenants`'
-rows use, no polling needed.
+**Response shape:** `POST /signup` returns a `PENDING` (or `AWAITING_APPROVAL`, see below) tenant immediately (poll
+`GET /signup/:tenantId/status` for completion). `POST /platform/tenants` returns the tenant already `ACTIVE` — same
+shape `GET /platform/tenants`' rows use, no polling needed.
+
+### Manual Approval Gate for Self-Serve Signups
+
+`PlatformSettingKey.SELF_SERVE_REQUIRES_APPROVAL` (boolean, default off — see Platform Settings below) inserts a
+review step between a cold self-serve `POST /signup` and real provisioning, to stop demo/test/abuse signups from
+auto-provisioning unattended. When on:
+
+1. `SignupController.signup()` still creates the `PENDING` `Tenant` row and records `SIGNUP_INITIATED` exactly as
+   before, but — for a genuine cold signup only, see below — calls `TenantProvisioningService.holdForApproval()`
+   instead of enqueueing the provisioning job. That sets `onboardingStatus = AWAITING_APPROVAL`, persists the signup
+   details `provision()` will eventually need onto the new `Tenant.pendingSignupParams` jsonb column (admin
+   name/email, plan, branch-invite linkage — these normally only ever live transiently in the queue job payload,
+   which doesn't work here since approval could happen an unpredictable amount of time later), records an
+   `AWAITING_APPROVAL` onboarding event, and emails every active platform admin who holds `TENANTS_WRITE` (via
+   `tenant-approval-needed.html`, a new platform-level template alongside `platform-admin-welcome.html` — same
+   "no tenant in CLS context" branding fallback) a link to the Tenants page.
+2. `TenantMiddleware` treats `AWAITING_APPROVAL` identically to `PENDING`/`PROVISIONING` — a site visitor sees the
+   same "still being set up" 503, not a different message; only the platform-admin console needs the distinct state.
+3. A platform admin reviews the held signup from its detail panel in discuva-platform and either:
+   - **Approves** — `PATCH /platform/tenants/:id/approve` (`TENANTS_WRITE`, `PlatformTenantService.approveTenant`):
+     404/409 unless the tenant is actually `AWAITING_APPROVAL`, reconstructs the provisioning job from
+     `pendingSignupParams`, records an `APPROVED` event (`actorType: PLATFORM_ADMIN`), and enqueues it via the same
+     `TenantProvisioningService.enqueueProvisioning()` both this and `SignupController` call — provisioning stays
+     async even here, since this is still fundamentally a self-serve signup being released, not a platform admin
+     directly creating one (`POST /platform/tenants` stays instant and untouched by this gate entirely).
+   - **Rejects** — reuses `DELETE /platform/tenants/:id` (see "Deleting an invalid/incomplete signup" above), whose
+     allowed-status set now includes `AWAITING_APPROVAL` alongside `PENDING`/`FAILED`.
+
+**A branch invite bypasses this gate even when the toggle is on** — accepting an invite already required a parent
+tenant's own admin to generate the token, so it's an invitation-only path already vetted once; gating it a second
+time behind generic approval would be redundant friction on top of vetting that already happened. Only a cold,
+anonymous signup (`resolvedInvite` unset in `SignupController.signup()`) is ever held.
+
+**Why `TenantProvisioningService` now owns `TENANT_PROVISIONING_QUEUE`/`TENANT_PROVISIONING_JOB`/
+`TenantProvisioningJobData`** (moved from `tenant-provisioning.processor.ts`, which now imports them back): both
+`SignupController` and `PlatformTenantService.approveTenant()` need to construct and enqueue a provisioning job, and
+the processor already imported `TenantProvisioningService` — defining the job-payload contract there too instead of
+keeping it on the processor avoids a circular file import between the two.
+
+### Founder Welcome Email (`FounderWelcomeEmailScheduler`)
+
+A personal, one-time note from Discuva's founder, sent 1 day after a tenant first reaches `ACTIVE` — every
+activation path (self-serve, platform-admin-created, an approved signup, a branch), not just self-serve. Deliberately
+separate from the transactional `tenant-welcome` email (the set-password link, sent immediately at provisioning) —
+this exists purely to feel human, not to drive an action.
+
+**Two new `Tenant` columns:** `activatedAt` (set exactly once, at the same two call sites that set
+`onboardingStatus = ACTIVE` and record `PROVISIONING_COMPLETED` — `TenantProvisioningProcessor.handle()` and
+`PlatformTenantService.createTenant()` — see "Manual Approval Gate" above for why this can't just be `createdAt`: a
+signup that sat `AWAITING_APPROVAL` for days would otherwise fire the founder email almost immediately after
+activation instead of a day after it) and `founderWelcomeEmailSentAt` (null until sent — the once-only guard; stays
+null on a failed send so the next day's sweep retries it, only set on actual success).
+
+**`FounderWelcomeEmailScheduler.sendDueFounderWelcomeEmails()`** — `@Cron('0 9 * * *')`, daily (a day-granularity
+threshold gets a daily check, not hourly — same reasoning `AssignmentReminderScheduler`/`PledgeReminderScheduler`
+already establish for their own `EVERY_DAY_AT_8AM` crons). Deliberately **not** routed through
+`forEachActiveTenant()` — that helper scans every active tenant on every run, which would mean re-checking every
+tenant on the platform daily just to find the handful newly due; instead queries `tenants` directly for
+`onboardingStatus = ACTIVE AND isActive = true AND founderWelcomeEmailSentAt IS NULL AND activatedAt <= now() - 24h`,
+then enters each matching tenant's schema one at a time via `runInTenantContext()` (the same primitive
+`forEachActiveTenant()` itself is built on) to read that tenant's earliest-created active `Admin`+`Member` — a raw
+CLS-scoped `tx.findOne(Admin, ...)` read, not an injected `Admin` repository, mirroring
+`PlatformTenantService.impersonateTenant()`'s identical pattern and for the identical reason (see
+`tenant-typeorm.module.ts`'s comment on why a plain `@InjectRepository()` can never see a per-job tenant
+transaction). The email itself is sent **outside** that tenant context (`UtilityService.sendEmailWithTemplate`,
+template `founder-welcome`) so branding resolves to Discuva's own identity via the same no-tenant-in-CLS fallback
+`platform-admin-welcome.html`/`tenant-approval-needed.html` already rely on — this is Jeremiah writing as Discuva's
+founder, not a tenant-branded transactional email. A tenant with no admin found is skipped (logged, not marked
+sent — shouldn't happen for a genuinely `ACTIVE` tenant, but defensive); a per-tenant send failure is caught, logged,
+and the loop continues to the next tenant, matching every other scheduler's resilience convention in this codebase.
+
+**No reply-to.** The template deliberately doesn't invite a reply — there's no `replyTo` mechanism anywhere in the
+email pipeline (`SendMailOptions` has no such field, across all 5 providers), so promising one would be hollow.
+Points instead to the tawk.to chat widget already live in discuva-admin's dashboard ("the chat bubble in the corner
+of your dashboard") as the real, working support channel.
 
 ### Role Elevation
 
@@ -7614,6 +7698,8 @@ being visible outside this service. All four routes now return the identical cur
 | PATCH | `/platform/tenants/:id/discount` | Apply an internal comp — `{ discountType: 'percentage' \| 'fixed_amount', discountValue, discountReason?, discountExpiresAt? }`. Requires an existing subscription. Never touches checkout/a payment provider — see Billing & Checkout above. |
 | DELETE | `/platform/tenants/:id/discount` | Clear a tenant's discount. |
 | POST | `/platform/tenants/:id/impersonate` | Issue a scoped support token for that tenant's admin. |
+| DELETE | `/platform/tenants/:id` | `TENANTS_DELETE` permission (separate from `TENANTS_WRITE`). Permanently deletes a tenant — `409` unless `onboardingStatus` is `PENDING`, `AWAITING_APPROVAL`, or `FAILED` (an `ACTIVE` tenant must be suspended instead, never deleted here — this is also how a held signup gets rejected). Drops the tenant's Postgres schema (`DROP SCHEMA IF EXISTS ... CASCADE`, a no-op if none was created) before removing the `tenants` row, which cascades onboarding events/subscriptions/etc. via existing FKs. |
+| PATCH | `/platform/tenants/:id/approve` | `TENANTS_WRITE`. Releases a self-serve signup held `AWAITING_APPROVAL` — `409` otherwise. Reconstructs the provisioning job from `pendingSignupParams` and enqueues it (still async, same as any self-serve signup). See "Manual Approval Gate for Self-Serve Signups" above. |
 | GET | `/platform/plans` | List plan rows (every currency/interval variant of every tier). |
 | POST | `/platform/plans` | Create a plan row — `tierKey` and `billingInterval` required, group it with sibling currency/interval variants. See "Multi-currency, multi-interval tiers" under Billing & Checkout above. |
 | PATCH | `/platform/plans/:id` | Edit a plan row's price/currency/`billingInterval`/features/`featureLimits`/`tierKey`. `400` if changing `currency` or `billingInterval` on a row that already has a `billingProviderPriceId` — see "Multi-currency, multi-interval tiers" above. |
@@ -7709,6 +7795,13 @@ underneath.
 `SocialMediaRetentionScheduler`'s daily sweep (see Social Media Module above). No dedicated frontend work was
 needed for this one: `/billing-settings` already renders every `KNOWN_PLATFORM_SETTINGS` entry generically from the
 `GET /platform/settings` response, so a new key just appears.
+
+**Consumer 5 — self-serve signup approval gate:** `SELF_SERVE_REQUIRES_APPROVAL` (default off) — read by
+`SignupController.signup()` via `PlatformSettingsService.getSelfServeRequiresApproval()`, awaited since it gates
+request flow (this codebase's Redis convention for a `get()` that decides what a request does, not merely renders).
+See "Manual Approval Gate for Self-Serve Signups" above for the full flow. Another boolean, same rendering-hint
+`type: 'boolean'` `/billing-settings` toggle as `ENFORCE_DISTANCE_CHECK_DEFAULT` — no dedicated frontend work needed
+here either.
 
 **Retired: `SOCIAL_MEDIA_ENABLED`** (formerly Consumer 5 here — a boolean, all-tenants-at-once composer readiness
 gate). Removed once `Tenant.moduleOverrides` shipped (see the Social Media Module and Tenant Module sections

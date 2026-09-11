@@ -285,6 +285,23 @@ export class PlatformAdminController {
   }
 
   @UseGuards(PlatformAdminGuard)
+  @RequiresPlatformPermission(PlatformAdminPermission.TENANTS_DELETE)
+  @Delete('tenants/:id')
+  async deleteTenant(@Param('id') id: string) {
+    await this.tenantService.deleteTenant(id);
+  }
+
+  @UseGuards(PlatformAdminGuard)
+  @RequiresPlatformPermission(PlatformAdminPermission.TENANTS_WRITE)
+  @Patch('tenants/:id/approve')
+  async approveTenant(
+    @Param('id') id: string,
+    @CurrentPlatformAdmin() admin: PlatformAdminAuth,
+  ) {
+    return this.tenantService.approveTenant(id, admin.id);
+  }
+
+  @UseGuards(PlatformAdminGuard)
   @RequiresPlatformPermission(PlatformAdminPermission.TENANTS_IMPERSONATE)
   @Post('tenants/:id/impersonate')
   async impersonateTenant(@Param('id') id: string) {

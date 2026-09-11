@@ -2,7 +2,9 @@ import * as path from 'node:path';
 import { randomInt } from 'node:crypto';
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bull';
 import { DataSource, Repository } from 'typeorm';
+import { Queue } from 'bull';
 import { ClsService } from 'nestjs-cls';
 import { TransactionHost } from '@nestjs-cls/transactional';
 import { TransactionalAdapterTypeOrm } from '@nestjs-cls/transactional-adapter-typeorm';
@@ -29,6 +31,8 @@ import {
   TenantOnboardingEvent,
   TenantOnboardingEventType,
 } from '../entity/tenant-onboarding-event.entity';
+import { PlatformAdmin } from '../../platform-admin/entity/platform-admin.entity';
+import { PlatformAdminPermission } from '../../platform-admin/enum/platform-admin-permission.enum';
 
 // How long a provisioning-time welcome OTP stays valid — deliberately much
 // longer than OTP_TTL_SECONDS' normal 15-minute forgot-password window,
@@ -68,6 +72,22 @@ export interface ProvisionTenantParams {
   allowGenericSubdomain?: boolean;
 }
 
+// Owned here (not the processor) — this service defines the contract of
+// what a provisioning job needs (ProvisionTenantParams plus the bookkeeping
+// fields below), the processor just consumes it. Also avoids a circular
+// import: the processor already imports TenantProvisioningService itself.
+export const TENANT_PROVISIONING_QUEUE = 'tenant-provisioning';
+export const TENANT_PROVISIONING_JOB = 'provision';
+
+export interface TenantProvisioningJobData extends ProvisionTenantParams {
+  tenantId: string;
+  actorType: TenantOnboardingActorType;
+  actorId?: string;
+  // Signup-path only — consumed by the processor (not the controller/
+  // approveTenant) since neither of those await provisioning to completion.
+  branchInviteToken?: string;
+}
+
 // Shared by POST /signup and the provision:tenant CLI script — one
 // implementation, not two to keep in sync (docs/MULTI_TENANT_MIGRATION.md
 // §4.8). Every step checks existing state before acting, so calling
@@ -86,11 +106,94 @@ export class TenantProvisioningService {
     private readonly subscriptionRepo: Repository<Subscription>,
     @InjectRepository(TenantOnboardingEvent)
     private readonly eventRepo: Repository<TenantOnboardingEvent>,
+    @InjectRepository(PlatformAdmin)
+    private readonly platformAdminRepo: Repository<PlatformAdmin>,
+    @InjectQueue(TENANT_PROVISIONING_QUEUE)
+    private readonly provisioningQueue: Queue<TenantProvisioningJobData>,
     private readonly cls: ClsService<AppClsStore>,
     private readonly txHost: TransactionHost<TransactionalAdapterTypeOrm>,
     private readonly utilityService: UtilityService,
     private readonly configService: ConfigService,
   ) {}
+
+  // Single place a provisioning job actually gets queued — SignupController
+  // (immediate, toggle off) and PlatformTenantService.approveTenant (a held
+  // signup being released) both call this rather than each holding their
+  // own @InjectQueue() and building the payload by hand.
+  async enqueueProvisioning(jobData: TenantProvisioningJobData): Promise<void> {
+    await this.provisioningQueue.add(TENANT_PROVISIONING_JOB, jobData);
+  }
+
+  // Holds a self-serve signup for review instead of enqueueing provisioning —
+  // called from SignupController when
+  // PlatformSettingKey.SELF_SERVE_REQUIRES_APPROVAL is on. Persists the
+  // params provision() will eventually need (see Tenant.pendingSignupParams'
+  // own comment for why these can't just stay transient in a queue job the
+  // way the non-gated flow keeps them).
+  async holdForApproval(
+    tenant: Tenant,
+    pendingParams: Omit<ProvisionTenantParams, 'subdomain' | 'churchName'> & {
+      branchInviteToken?: string;
+    },
+  ): Promise<void> {
+    await this.tenantRepo.update(tenant.id, {
+      onboardingStatus: TenantOnboardingStatus.AWAITING_APPROVAL,
+      pendingSignupParams: pendingParams,
+    });
+    await this.recordEvent(
+      tenant.id,
+      'AWAITING_APPROVAL',
+      TenantOnboardingActorType.SELF_SERVE,
+    );
+    this.notifyPlatformAdminsOfPendingApproval(tenant, pendingParams);
+  }
+
+  // Fire-and-forget per this codebase's queue convention — every recipient
+  // gets their own send so one bad address can't block the rest. Scoped to
+  // admins who can actually act on it (TENANTS_WRITE, the same permission
+  // PlatformTenantService.approveTenant requires), not every platform admin —
+  // e.g. a billing-only admin has nothing useful to do with this email.
+  private notifyPlatformAdminsOfPendingApproval(
+    tenant: Tenant,
+    params: {
+      adminFirstname: string;
+      adminLastname: string;
+      adminEmail: string;
+    },
+  ): void {
+    const platformLoginUrl =
+      this.configService.get<string>('PLATFORM_LOGIN_URL');
+    const reviewUrl = `${platformLoginUrl}/tenants`;
+
+    this.platformAdminRepo
+      .find({ where: { isActive: true }, relations: ['platformAdminRole'] })
+      .then((admins) => {
+        const eligible = admins.filter((admin) =>
+          admin.platformAdminRole.permissions.includes(
+            PlatformAdminPermission.TENANTS_WRITE,
+          ),
+        );
+        for (const admin of eligible) {
+          this.utilityService.sendEmailWithTemplate(
+            admin.email,
+            `New signup awaiting approval — ${tenant.name}`,
+            'tenant-approval-needed',
+            {
+              church_name: tenant.name,
+              subdomain: tenant.subdomain,
+              admin_name: `${params.adminFirstname} ${params.adminLastname}`,
+              admin_email: params.adminEmail,
+              review_url: reviewUrl,
+            },
+          );
+        }
+      })
+      .catch((err: Error) => {
+        this.logger.error(
+          `Failed to notify platform admins of pending approval for tenant ${tenant.id}: ${err.message}`,
+        );
+      });
+  }
 
   // Find-or-create the Tenant row only — split out of provision() so the
   // two HTTP callers (SignupController, PlatformTenantService.createTenant)

@@ -67,6 +67,35 @@ export class Tenant extends BaseEntity {
   @Column({ default: TenantOnboardingStatus.PENDING })
   onboardingStatus: TenantOnboardingStatus;
 
+  // Only ever set while onboardingStatus is AWAITING_APPROVAL — the signup
+  // details `provision()` needs (admin name/email, plan, branch-invite
+  // linkage) that ensurePendingTenant() itself never persists, stashed here
+  // because approval can happen an unpredictable amount of time after
+  // signup (unlike the normal flow, where they only ever live transiently
+  // in the queue job payload). Cleared implicitly once approveTenant()
+  // enqueues real provisioning — nothing reads this once ACTIVE.
+  @Column({ type: 'jsonb', nullable: true })
+  pendingSignupParams: Record<string, unknown> | null;
+
+  // Set exactly once, the moment onboardingStatus first reaches ACTIVE
+  // (TenantProvisioningProcessor.handle() for the async path,
+  // PlatformTenantService.createTenant() for the inline one) — distinct from
+  // createdAt, which is when the PENDING row was first created and can be
+  // days earlier for a signup that sat AWAITING_APPROVAL a while.
+  // FounderWelcomeEmailScheduler's "1 day after activation" threshold reads
+  // this, not createdAt, for exactly that reason.
+  @Column({ nullable: true })
+  activatedAt: Date | null;
+
+  // Set once FounderWelcomeEmailScheduler successfully sends the founder's
+  // personal welcome note — the guard against sending it twice, and against
+  // ever sending it again on a later scheduler run for a tenant already
+  // handled. Null (not just "activatedAt is old") is the actual signal a
+  // send is still due, since a failed attempt must stay null to retry on the
+  // next day's run.
+  @Column({ nullable: true })
+  founderWelcomeEmailSentAt: Date | null;
+
   // Self-referencing and nullable — a flat parent -> branch model, though
   // only one level is used today; a multi-level hierarchy (branch-of-a-
   // branch) is representable with zero further schema change

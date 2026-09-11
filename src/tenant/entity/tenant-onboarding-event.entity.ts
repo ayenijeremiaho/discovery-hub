@@ -13,6 +13,14 @@ import { TenantOnboardingActorType } from '../enum/tenant-onboarding-actor-type.
 export type TenantOnboardingEventType =
   | 'SIGNUP_INITIATED'
   | 'PLATFORM_ADMIN_INITIATED'
+  // Self-serve only, and only when PlatformSettingKey.SELF_SERVE_REQUIRES_APPROVAL
+  // is on — recorded instead of enqueueing provisioning immediately.
+  | 'AWAITING_APPROVAL'
+  // A platform admin released a held signup — actorType is always
+  // PLATFORM_ADMIN here, distinct from PLATFORM_ADMIN_INITIATED (that one
+  // means the admin created the tenant themselves; this one means they
+  // approved someone else's self-serve signup).
+  | 'APPROVED'
   | 'PROVISIONING_STARTED'
   | 'PROVISIONING_COMPLETED'
   | 'PROVISIONING_FAILED';

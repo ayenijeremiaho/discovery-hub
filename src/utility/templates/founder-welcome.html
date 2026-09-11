@@ -1,0 +1,127 @@
+<!DOCTYPE html
+  PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <title></title>
+  <style type="text/css" rel="stylesheet" media="all">
+      body {
+          width: 100% !important;
+          height: 100%;
+          margin: 0;
+          -webkit-text-size-adjust: none;
+          background-color: #F4F1EA;
+          color: #121212;
+      }
+
+      a {
+          color: #121212;
+      }
+
+      td {
+          word-break: break-word;
+      }
+
+      .preheader {
+          display: none !important;
+          visibility: hidden;
+          mso-hide: all;
+          font-size: 1px;
+          line-height: 1px;
+          max-height: 0;
+          max-width: 0;
+          opacity: 0;
+          overflow: hidden;
+      }
+
+      body,
+      td,
+      th {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+
+      .email-wrapper {
+          width: 100%;
+          margin: 0;
+          padding: 0;
+          background-color: #F4F1EA;
+      }
+
+      .email-body_inner {
+          width: 540px;
+          margin: 0 auto;
+          padding: 48px 44px;
+          background-color: #FFFFFF;
+          border: 1px solid rgba(18, 18, 18, 0.05);
+      }
+
+      p {
+          margin: 0 0 18px;
+          font-size: 15px;
+          line-height: 1.7;
+          font-weight: 300;
+          color: #121212;
+      }
+
+      .signoff {
+          margin-top: 8px;
+      }
+
+      .signoff .name {
+          font-weight: 600;
+          color: #121212;
+      }
+
+      .signoff .title {
+          font-size: 13px;
+          color: #8A817C;
+      }
+
+      @media only screen and (max-width: 600px) {
+          .email-body_inner {
+              width: 100% !important;
+              padding: 32px 24px;
+          }
+      }
+  </style>
+</head>
+
+<body>
+<span class="preheader">A quick, personal note now that {{ church_name }} is up and running on {{ product_name }}.</span>
+<table class="email-wrapper" width="100%" cellpadding="0" cellspacing="0" role="presentation">
+  <tr>
+    <td align="center" style="padding: 40px 16px;">
+      <table class="email-body_inner" align="center" cellpadding="0" cellspacing="0" role="presentation">
+        <tr>
+          <td>
+            <p>Hi {{ name }},</p>
+
+            <p>I'm Jeremiah — I built {{ product_name }}. I wanted to write to you myself, not send another
+              automated welcome, now that {{ church_name }} has had a day to settle in on the platform.</p>
+
+            <p>Genuinely, thank you for trusting us with something as important as your church's people and
+              records. That's not a small thing to hand over to a new tool, and I don't take it lightly.</p>
+
+            <p>If anything feels confusing, missing, or just not quite right — the chat bubble in the corner of
+              your dashboard reaches our team directly, and we're quick to respond. You're not just a user to
+              us; you're a partner, and we want {{ product_name }} to actually earn its place in how your
+              church runs.</p>
+
+            <p>Excited to have {{ church_name }} with us.</p>
+
+            <div class="signoff">
+              <p style="margin-bottom: 0;">Warmly,</p>
+              <p class="name" style="margin-bottom: 0;">Jeremiah</p>
+              <p class="title">Founder, {{ product_name }}</p>
+            </div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+
+</html>

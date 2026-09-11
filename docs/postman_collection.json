@@ -32017,6 +32017,67 @@
           "response": []
         },
         {
+          "name": "Delete Tenant (Invalid Signup Only)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{platformAccessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/platform/tenants/{{platformTenantId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "platform",
+                "tenants",
+                "{{platformTenantId}}"
+              ]
+            },
+            "description": "Permanently deletes a tenant. 409 unless onboardingStatus is PENDING, AWAITING_APPROVAL, or FAILED (this is also how a held signup gets rejected) - an ACTIVE tenant (even suspended) must not be deleted here, only suspended. Drops the tenant's Postgres schema (no-op if none was created) before removing the tenants row, which cascades onboarding events/subscription/etc. via existing FKs. Requires the TENANTS_DELETE permission, separate from TENANTS_WRITE."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Tenant (Release Held Signup)",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{platformAccessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/platform/tenants/{{platformTenantId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "platform",
+                "tenants",
+                "{{platformTenantId}}",
+                "approve"
+              ]
+            },
+            "description": "Releases a self-serve signup held AWAITING_APPROVAL (manual approval gate, PlatformSettingKey.SELF_SERVE_REQUIRES_APPROVAL). 409 unless the tenant is actually AWAITING_APPROVAL. Reconstructs the provisioning job from pendingSignupParams and enqueues it (still async). Requires TENANTS_WRITE. To reject a held signup instead, use DELETE /platform/tenants/:id."
+          },
+          "response": []
+        },
+        {
           "name": "List Plans",
           "request": {
             "method": "GET",

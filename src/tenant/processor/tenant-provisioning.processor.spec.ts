@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Job } from 'bull';
+import { TenantProvisioningProcessor } from './tenant-provisioning.processor';
 import {
   TenantProvisioningJobData,
-  TenantProvisioningProcessor,
-} from './tenant-provisioning.processor';
-import { TenantProvisioningService } from '../service/tenant-provisioning.service';
+  TenantProvisioningService,
+} from '../service/tenant-provisioning.service';
 import { BranchInviteService } from '../../branch/service/branch-invite.service';
 import { Tenant } from '../entity/tenant.entity';
 import { TenantOnboardingStatus } from '../enum/tenant-onboarding-status.enum';
@@ -81,12 +81,16 @@ describe('TenantProvisioningProcessor', () => {
       );
     });
 
-    it('marks the tenant ACTIVE and records the completed event on success', async () => {
+    it('marks the tenant ACTIVE, stamps activatedAt, and records the completed event on success', async () => {
       await processor.handle(makeJob());
 
-      expect(mockTenantRepo.update).toHaveBeenCalledWith('tenant-1', {
-        onboardingStatus: TenantOnboardingStatus.ACTIVE,
-      });
+      expect(mockTenantRepo.update).toHaveBeenCalledWith(
+        'tenant-1',
+        expect.objectContaining({
+          onboardingStatus: TenantOnboardingStatus.ACTIVE,
+          activatedAt: expect.any(Date),
+        }),
+      );
       expect(mockProvisioningService.recordEvent).toHaveBeenCalledWith(
         'tenant-1',
         'PROVISIONING_COMPLETED',

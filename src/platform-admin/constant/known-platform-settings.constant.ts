@@ -93,6 +93,14 @@ export const KNOWN_PLATFORM_SETTINGS: Record<
     min: 1,
     max: 365,
   },
+  [PlatformSettingKey.SELF_SERVE_REQUIRES_APPROVAL]: {
+    label: 'Require Manual Approval for Signups',
+    unit: 'off = auto-provision self-serve signups immediately; on = hold for a platform admin to approve — 0 = off, 1 = on',
+    defaultValue: 0,
+    min: 0,
+    max: 1,
+    type: 'boolean',
+  },
 };
 
 // Multer parses to memory before our own dynamic per-setting check can run

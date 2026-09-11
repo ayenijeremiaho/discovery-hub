@@ -20,4 +20,10 @@ export enum PlatformSettingKey {
   // it. Published posts' media is retained indefinitely regardless of this
   // setting — only unpublished drafts age out.
   SOCIAL_MEDIA_DRAFT_RETENTION_DAYS = 'social_media_draft_retention_days',
+  // Boolean (0/1) — when on, a self-serve POST /signup is held
+  // AWAITING_APPROVAL instead of auto-enqueueing provisioning; a platform
+  // admin with TENANTS_WRITE is emailed and must approve it. Off means
+  // today's behavior — auto-provision immediately. See
+  // TenantProvisioningService.holdForApproval/PlatformTenantService.approveTenant.
+  SELF_SERVE_REQUIRES_APPROVAL = 'self_serve_requires_approval',
 }

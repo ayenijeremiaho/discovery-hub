@@ -11,6 +11,14 @@ export enum PlatformAdminPermission {
   // tenant's admin is a materially bigger capability than renaming a tenant
   // or changing its plan, and should be grantable independently.
   TENANTS_IMPERSONATE = 'tenants:impersonate',
+  // Permanently removes a tenant row and, if one was created, its Postgres
+  // schema — separate from TENANTS_WRITE for the same "bigger blast radius
+  // than it looks" reasoning as TENANTS_IMPERSONATE, but materially more
+  // dangerous still: this is the one tenant action that isn't reversible.
+  // deleteTenant() itself only allows this for PENDING/FAILED signups, never
+  // an ACTIVE tenant, but the permission is scoped independently of that
+  // service-side guard so it can also be revoked from a role entirely.
+  TENANTS_DELETE = 'tenants:delete',
   PLANS_READ = 'plans:read',
   PLANS_WRITE = 'plans:write',
   COMMUNICATION_PROVIDERS_READ = 'communication_providers:read',
@@ -53,6 +61,7 @@ export const PLATFORM_ADMIN_PERMISSION_LABELS: Record<
   [PlatformAdminPermission.TENANTS_READ]: 'View Tenants',
   [PlatformAdminPermission.TENANTS_WRITE]: 'Manage Tenants',
   [PlatformAdminPermission.TENANTS_IMPERSONATE]: 'Impersonate Tenant Admins',
+  [PlatformAdminPermission.TENANTS_DELETE]: 'Delete Invalid Signups',
   [PlatformAdminPermission.PLANS_READ]: 'View Plans',
   [PlatformAdminPermission.PLANS_WRITE]: 'Manage Plans',
   [PlatformAdminPermission.COMMUNICATION_PROVIDERS_READ]:
@@ -103,6 +112,7 @@ export const PlatformAdminPermissionGroups: PlatformAdminPermissionGroup[] = [
     PlatformAdminPermission.TENANTS_READ,
     PlatformAdminPermission.TENANTS_WRITE,
     PlatformAdminPermission.TENANTS_IMPERSONATE,
+    PlatformAdminPermission.TENANTS_DELETE,
   ]),
   buildGroup('Plans', [
     PlatformAdminPermission.PLANS_READ,

@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getQueueToken } from '@nestjs/bull';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { SignupController } from './signup.controller';
@@ -8,17 +7,19 @@ import { BranchInviteService } from '../../branch/service/branch-invite.service'
 import { Tenant } from '../entity/tenant.entity';
 import { TenantOnboardingStatus } from '../enum/tenant-onboarding-status.enum';
 import { TenantOnboardingActorType } from '../enum/tenant-onboarding-actor-type.enum';
-import { TENANT_PROVISIONING_QUEUE } from '../processor/tenant-provisioning.processor';
+import { PlatformSettingsService } from '../../platform-admin/service/platform-settings.service';
 
 const mockProvisioningService = {
   ensurePendingTenant: jest.fn(),
   recordEvent: jest.fn(),
+  enqueueProvisioning: jest.fn(),
+  holdForApproval: jest.fn(),
 };
 const mockBranchInviteService = {
   resolveInvite: jest.fn(),
   markAccepted: jest.fn(),
 };
-const mockQueue = { add: jest.fn().mockResolvedValue({ id: 'job-1' }) };
+const mockSettingsService = { getSelfServeRequiresApproval: jest.fn() };
 const mockTenantRepo = { findOneBy: jest.fn() };
 
 const baseDto = {
@@ -44,6 +45,7 @@ describe('SignupController', () => {
     mockProvisioningService.ensurePendingTenant.mockResolvedValue(
       pendingTenant,
     );
+    mockSettingsService.getSelfServeRequiresApproval.mockResolvedValue(false);
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SignupController],
@@ -53,10 +55,7 @@ describe('SignupController', () => {
           useValue: mockProvisioningService,
         },
         { provide: BranchInviteService, useValue: mockBranchInviteService },
-        {
-          provide: getQueueToken(TENANT_PROVISIONING_QUEUE),
-          useValue: mockQueue,
-        },
+        { provide: PlatformSettingsService, useValue: mockSettingsService },
         { provide: getRepositoryToken(Tenant), useValue: mockTenantRepo },
       ],
     }).compile();
@@ -78,8 +77,8 @@ describe('SignupController', () => {
         'SIGNUP_INITIATED',
         TenantOnboardingActorType.SELF_SERVE,
       );
-      expect(mockQueue.add).toHaveBeenCalledWith(
-        'provision',
+      expect(mockProvisioningService.holdForApproval).not.toHaveBeenCalled();
+      expect(mockProvisioningService.enqueueProvisioning).toHaveBeenCalledWith(
         expect.objectContaining({
           tenantId: 'tenant-1',
           parentTenantId: undefined,
@@ -109,8 +108,7 @@ describe('SignupController', () => {
         baseDto.churchName,
         'parent-tenant-1',
       );
-      expect(mockQueue.add).toHaveBeenCalledWith(
-        'provision',
+      expect(mockProvisioningService.enqueueProvisioning).toHaveBeenCalledWith(
         expect.objectContaining({
           parentTenantId: 'parent-tenant-1',
           branchInviteToken: 'the-token',
@@ -129,8 +127,7 @@ describe('SignupController', () => {
 
       await controller.signup({ ...baseDto, branchInviteToken: 'the-token' });
 
-      expect(mockQueue.add).toHaveBeenCalledWith(
-        'provision',
+      expect(mockProvisioningService.enqueueProvisioning).toHaveBeenCalledWith(
         expect.objectContaining({
           parentTenantId: 'parent-tenant-1',
           sponsoredPlanId: 'pro',
@@ -146,7 +143,9 @@ describe('SignupController', () => {
       await expect(controller.signup(baseDto)).rejects.toThrow(
         'This subdomain is already in use.',
       );
-      expect(mockQueue.add).not.toHaveBeenCalled();
+      expect(
+        mockProvisioningService.enqueueProvisioning,
+      ).not.toHaveBeenCalled();
     });
 
     it('propagates an invalid/expired invite token as a signup failure before creating a tenant row', async () => {
@@ -160,7 +159,40 @@ describe('SignupController', () => {
       expect(
         mockProvisioningService.ensurePendingTenant,
       ).not.toHaveBeenCalled();
-      expect(mockQueue.add).not.toHaveBeenCalled();
+      expect(
+        mockProvisioningService.enqueueProvisioning,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('holds a cold self-serve signup for approval instead of enqueueing when the toggle is on', async () => {
+      mockSettingsService.getSelfServeRequiresApproval.mockResolvedValue(true);
+
+      const result = await controller.signup(baseDto);
+
+      expect(mockProvisioningService.holdForApproval).toHaveBeenCalledWith(
+        pendingTenant,
+        expect.objectContaining({
+          adminFirstname: baseDto.adminFirstname,
+          adminEmail: baseDto.adminEmail,
+        }),
+      );
+      expect(
+        mockProvisioningService.enqueueProvisioning,
+      ).not.toHaveBeenCalled();
+      expect(result.tenant.onboardingStatus).toBe('AWAITING_APPROVAL');
+    });
+
+    it('never holds a branch-invite signup for approval, even when the toggle is on — an invite is already vetted', async () => {
+      mockSettingsService.getSelfServeRequiresApproval.mockResolvedValue(true);
+      mockBranchInviteService.resolveInvite.mockResolvedValue({
+        parentTenantId: 'parent-tenant-1',
+        sponsoredPlanId: null,
+      });
+
+      await controller.signup({ ...baseDto, branchInviteToken: 'the-token' });
+
+      expect(mockProvisioningService.holdForApproval).not.toHaveBeenCalled();
+      expect(mockProvisioningService.enqueueProvisioning).toHaveBeenCalled();
     });
   });
 

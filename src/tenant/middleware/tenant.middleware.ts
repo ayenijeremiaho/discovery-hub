@@ -90,6 +90,7 @@ export class TenantMiddleware implements NestMiddleware {
     if (tenant.onboardingStatus !== TenantOnboardingStatus.ACTIVE) {
       if (
         tenant.onboardingStatus === TenantOnboardingStatus.PENDING ||
+        tenant.onboardingStatus === TenantOnboardingStatus.AWAITING_APPROVAL ||
         tenant.onboardingStatus === TenantOnboardingStatus.PROVISIONING
       ) {
         throw new ServiceUnavailableException(

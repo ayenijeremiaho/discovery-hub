@@ -3,7 +3,11 @@ import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { ClsService } from 'nestjs-cls';
 import { TransactionHost } from '@nestjs-cls/transactional';
 import { ConfigService } from '@nestjs/config';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PlatformTenantService } from './platform-tenant.service';
 import { Tenant } from '../../tenant/entity/tenant.entity';
 import { Subscription } from '../../billing/entity/subscription.entity';
@@ -19,6 +23,7 @@ const mockTenantRepo = {
   findOneBy: jest.fn(),
   save: jest.fn(),
   update: jest.fn(),
+  remove: jest.fn(),
 };
 const mockSubscriptionRepo = {
   find: jest.fn(),
@@ -37,6 +42,7 @@ const mockProvisioningService = {
   ensurePendingTenant: jest.fn(),
   recordEvent: jest.fn(),
   provision: jest.fn(),
+  enqueueProvisioning: jest.fn(),
 };
 const mockCacheService = { del: jest.fn() };
 const mockClsService = { runWith: jest.fn((_ctx, fn) => fn()) };
@@ -262,6 +268,7 @@ describe('PlatformTenantService', () => {
       expect(mockTenantRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({
           onboardingStatus: TenantOnboardingStatus.ACTIVE,
+          activatedAt: expect.any(Date),
         }),
       );
       expect(mockProvisioningService.recordEvent).toHaveBeenCalledWith(
@@ -775,6 +782,158 @@ describe('PlatformTenantService', () => {
       const result = await service.getSocialMediaRollout();
 
       expect(result).toEqual({ enabled: false, tenantIds: [] });
+    });
+  });
+
+  describe('deleteTenant', () => {
+    it('drops the schema and removes a PENDING tenant', async () => {
+      const tenant = {
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.PENDING,
+      };
+      mockTenantRepo.findOneBy.mockResolvedValue(tenant);
+      mockDataSource.query.mockResolvedValue(undefined);
+
+      await service.deleteTenant('tenant-1');
+
+      expect(mockDataSource.query).toHaveBeenCalledWith(
+        'DROP SCHEMA IF EXISTS "church_test_church" CASCADE',
+      );
+      expect(mockTenantRepo.remove).toHaveBeenCalledWith(tenant);
+    });
+
+    it('drops the schema and removes a FAILED tenant', async () => {
+      const tenant = {
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.FAILED,
+      };
+      mockTenantRepo.findOneBy.mockResolvedValue(tenant);
+      mockDataSource.query.mockResolvedValue(undefined);
+
+      await service.deleteTenant('tenant-1');
+
+      expect(mockTenantRepo.remove).toHaveBeenCalledWith(tenant);
+    });
+
+    it('drops the schema and removes an AWAITING_APPROVAL tenant — this is how a platform admin rejects one', async () => {
+      const tenant = {
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.AWAITING_APPROVAL,
+      };
+      mockTenantRepo.findOneBy.mockResolvedValue(tenant);
+      mockDataSource.query.mockResolvedValue(undefined);
+
+      await service.deleteTenant('tenant-1');
+
+      expect(mockTenantRepo.remove).toHaveBeenCalledWith(tenant);
+    });
+
+    it('refuses to delete an ACTIVE tenant', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue({
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.ACTIVE,
+      });
+
+      await expect(service.deleteTenant('tenant-1')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mockTenantRepo.remove).not.toHaveBeenCalled();
+      expect(mockDataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('refuses to delete a tenant mid-PROVISIONING', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue({
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.PROVISIONING,
+      });
+
+      await expect(service.deleteTenant('tenant-1')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mockTenantRepo.remove).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException for an unknown tenant', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue(null);
+
+      await expect(service.deleteTenant('missing')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('approveTenant', () => {
+    const pendingParams = {
+      adminFirstname: 'Ada',
+      adminLastname: 'Min',
+      adminEmail: 'admin@test-church.org',
+      planId: 'free',
+    };
+
+    it('records APPROVED and enqueues provisioning reconstructed from pendingSignupParams', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue({
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.AWAITING_APPROVAL,
+        pendingSignupParams: pendingParams,
+      });
+      mockDataSource.query.mockResolvedValue([{ c: 0 }]);
+      mockSubscriptionRepo.findOneBy.mockResolvedValue(null);
+
+      await service.approveTenant('tenant-1', 'platform-admin-1');
+
+      expect(mockProvisioningService.recordEvent).toHaveBeenCalledWith(
+        'tenant-1',
+        'APPROVED',
+        TenantOnboardingActorType.PLATFORM_ADMIN,
+        { actorId: 'platform-admin-1' },
+      );
+      expect(mockProvisioningService.enqueueProvisioning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          subdomain: baseTenant.subdomain,
+          churchName: baseTenant.name,
+          adminEmail: pendingParams.adminEmail,
+          actorType: TenantOnboardingActorType.SELF_SERVE,
+        }),
+      );
+    });
+
+    it('refuses to approve a tenant that is not AWAITING_APPROVAL', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue({
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.PENDING,
+        pendingSignupParams: pendingParams,
+      });
+
+      await expect(
+        service.approveTenant('tenant-1', 'platform-admin-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(
+        mockProvisioningService.enqueueProvisioning,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('refuses to approve when pendingSignupParams is missing', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue({
+        ...baseTenant,
+        onboardingStatus: TenantOnboardingStatus.AWAITING_APPROVAL,
+        pendingSignupParams: null,
+      });
+
+      await expect(
+        service.approveTenant('tenant-1', 'platform-admin-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(
+        mockProvisioningService.enqueueProvisioning,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException for an unknown tenant', async () => {
+      mockTenantRepo.findOneBy.mockResolvedValue(null);
+
+      await expect(
+        service.approveTenant('missing', 'platform-admin-1'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

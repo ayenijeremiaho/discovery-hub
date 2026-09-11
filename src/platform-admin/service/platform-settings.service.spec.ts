@@ -251,6 +251,36 @@ describe('PlatformSettingsService', () => {
     });
   });
 
+  describe('getSelfServeRequiresApproval', () => {
+    it('returns the cached value without hitting the DB', async () => {
+      mockCacheService.getGlobal.mockResolvedValue(1);
+
+      const result = await service.getSelfServeRequiresApproval();
+
+      expect(result).toBe(true);
+      expect(mockSettingRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('defaults to off (0) when no cache or DB row exists', async () => {
+      mockSettingRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.getSelfServeRequiresApproval();
+
+      expect(result).toBe(false);
+    });
+
+    it('reflects a platform admin turning it on', async () => {
+      mockSettingRepo.findOne.mockResolvedValue({
+        key: PlatformSettingKey.SELF_SERVE_REQUIRES_APPROVAL,
+        value: { value: 1 },
+      });
+
+      const result = await service.getSelfServeRequiresApproval();
+
+      expect(result).toBe(true);
+    });
+  });
+
   describe('findOne', () => {
     it('reports type: "boolean" for a boolean-shaped setting', async () => {
       mockSettingRepo.findOne.mockResolvedValue(null);

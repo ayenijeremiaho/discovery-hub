@@ -13,15 +13,18 @@ import refreshJwtConfig from '../config/refresh.jwt.config';
 import { Tenant } from './entity/tenant.entity';
 import { TenantAssetOverride } from './entity/tenant-asset-override.entity';
 import { TenantOnboardingEvent } from './entity/tenant-onboarding-event.entity';
+import { PlatformAdmin } from '../platform-admin/entity/platform-admin.entity';
+import { PlatformAdminRole } from '../platform-admin/entity/platform-admin-role.entity';
 import { TenantMiddleware } from './middleware/tenant.middleware';
 import { TenantInfoController } from './controller/tenant-info.controller';
 import { SignupController } from './controller/signup.controller';
-import { TenantProvisioningService } from './service/tenant-provisioning.service';
-import { TenantAssetService } from './service/tenant-asset.service';
 import {
   TENANT_PROVISIONING_QUEUE,
-  TenantProvisioningProcessor,
-} from './processor/tenant-provisioning.processor';
+  TenantProvisioningService,
+} from './service/tenant-provisioning.service';
+import { TenantAssetService } from './service/tenant-asset.service';
+import { TenantProvisioningProcessor } from './processor/tenant-provisioning.processor';
+import { FounderWelcomeEmailScheduler } from './scheduler/founder-welcome-email.scheduler';
 import { BranchModule } from '../branch/branch.module';
 
 /**
@@ -104,6 +107,14 @@ import { BranchModule } from '../branch/branch.module';
       Tenant,
       TenantAssetOverride,
       TenantOnboardingEvent,
+      // Read-only here — just to find who to email when a signup needs
+      // approval (TenantProvisioningService.holdForApproval). Registering
+      // the entities directly avoids importing PlatformAdminModule wholesale
+      // (which itself imports TenantModule — would be circular); the same
+      // "own repository registration rather than fight the DI graph"
+      // reasoning PlatformTenantService already uses for its JwtService.
+      PlatformAdmin,
+      PlatformAdminRole,
     ]),
     BullModule.registerQueue({ name: TENANT_PROVISIONING_QUEUE }),
     BranchModule,
@@ -124,6 +135,7 @@ import { BranchModule } from '../branch/branch.module';
     TenantProvisioningService,
     TenantAssetService,
     TenantProvisioningProcessor,
+    FounderWelcomeEmailScheduler,
   ],
   exports: [TenantMiddleware, TenantProvisioningService],
 })

@@ -174,6 +174,7 @@ export class PlatformTenantService {
     }
 
     tenant.onboardingStatus = TenantOnboardingStatus.ACTIVE;
+    tenant.activatedAt = new Date();
     tenant = await this.tenantRepo.save(tenant);
     await this.provisioningService.recordEvent(
       tenant.id,
@@ -506,6 +507,88 @@ export class PlatformTenantService {
     subscription.discountReason = null;
     subscription.discountExpiresAt = null;
     return this.subscriptionRepo.save(subscription);
+  }
+
+  // Deliberately narrower than suspend: only a signup that never became a
+  // real church (PENDING — still queued/never provisioned; AWAITING_APPROVAL
+  // — held for review, this is also how a platform admin rejects one; or
+  // FAILED — provisioning blew up) can be hard-deleted. An ACTIVE tenant,
+  // even one later suspended, is refused here — that's real data (members,
+  // giving records, attendance) and would need its own, more deliberate
+  // deletion path with stronger confirmation, not this one. DROP SCHEMA IF
+  // EXISTS handles every case correctly: neither a PENDING nor an
+  // AWAITING_APPROVAL tenant has ever reached provision() (no-op), a FAILED
+  // one may have a partial schema from an attempt that died partway through
+  // — either way, nothing worth keeping survives in it. The tenants row
+  // delete that follows cascades onboarding events/subscriptions/etc. via
+  // existing FKs.
+  private static readonly DELETABLE_STATUSES: ReadonlySet<TenantOnboardingStatus> =
+    new Set([
+      TenantOnboardingStatus.PENDING,
+      TenantOnboardingStatus.AWAITING_APPROVAL,
+      TenantOnboardingStatus.FAILED,
+    ]);
+
+  async deleteTenant(id: string): Promise<void> {
+    const tenant = await this.findTenantOrThrow(id);
+    if (
+      !PlatformTenantService.DELETABLE_STATUSES.has(tenant.onboardingStatus)
+    ) {
+      throw new ConflictException(
+        'Only a PENDING, AWAITING_APPROVAL, or FAILED signup can be deleted — an active tenant must be suspended instead.',
+      );
+    }
+
+    await this.dataSource.query(
+      `DROP SCHEMA IF EXISTS "${tenant.schemaName}" CASCADE`,
+    );
+    await this.tenantRepo.remove(tenant);
+  }
+
+  // Releases a held self-serve signup — reconstructs the provisioning job
+  // payload from Tenant.pendingSignupParams (see its own comment for why
+  // this can't just be the transient job payload the non-gated flow uses)
+  // and enqueues it exactly like SignupController would have, had approval
+  // not been required. Stays async (queued, not run inline like
+  // createTenant()) — this is still fundamentally a self-serve signup being
+  // released, not a platform admin directly creating a tenant.
+  async approveTenant(id: string, actorId: string): Promise<TenantWithHealth> {
+    const tenant = await this.findTenantOrThrow(id);
+    if (tenant.onboardingStatus !== TenantOnboardingStatus.AWAITING_APPROVAL) {
+      throw new ConflictException(
+        'Only a signup awaiting approval can be approved.',
+      );
+    }
+    const pending = tenant.pendingSignupParams as {
+      adminFirstname: string;
+      adminLastname: string;
+      adminEmail: string;
+      planId?: string;
+      parentTenantId?: string;
+      sponsoredPlanId?: string;
+      branchInviteToken?: string;
+    } | null;
+    if (!pending) {
+      throw new ConflictException(
+        'This signup has no pending provisioning data to approve.',
+      );
+    }
+
+    await this.provisioningService.recordEvent(
+      tenant.id,
+      'APPROVED',
+      TenantOnboardingActorType.PLATFORM_ADMIN,
+      { actorId },
+    );
+    await this.provisioningService.enqueueProvisioning({
+      tenantId: tenant.id,
+      subdomain: tenant.subdomain,
+      churchName: tenant.name,
+      ...pending,
+      actorType: TenantOnboardingActorType.SELF_SERVE,
+    });
+
+    return this.toHealthShape(tenant);
   }
 
   // Issues a short-lived, ACCESS-TOKEN-ONLY JWT scoped to this tenant's

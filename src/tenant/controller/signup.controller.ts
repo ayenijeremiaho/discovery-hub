@@ -9,9 +9,7 @@ import {
   ParseUUIDPipe,
   Post,
 } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bull';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Queue } from 'bull';
 import { Repository } from 'typeorm';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../auth/decorator/public.decorator';
@@ -20,11 +18,7 @@ import { SignupDto } from '../dto/signup.dto';
 import { BranchInviteService } from '../../branch/service/branch-invite.service';
 import { Tenant } from '../entity/tenant.entity';
 import { TenantOnboardingActorType } from '../enum/tenant-onboarding-actor-type.enum';
-import {
-  TENANT_PROVISIONING_JOB,
-  TENANT_PROVISIONING_QUEUE,
-  TenantProvisioningJobData,
-} from '../processor/tenant-provisioning.processor';
+import { PlatformSettingsService } from '../../platform-admin/service/platform-settings.service';
 
 // Public, unauthenticated, rate-limited by IP — the primary entry point
 // into the self-serve freemium funnel (docs/MULTI_TENANT_MIGRATION.md §4.8).
@@ -41,8 +35,7 @@ export class SignupController {
   constructor(
     private readonly provisioningService: TenantProvisioningService,
     private readonly branchInviteService: BranchInviteService,
-    @InjectQueue(TENANT_PROVISIONING_QUEUE)
-    private readonly provisioningQueue: Queue<TenantProvisioningJobData>,
+    private readonly settingsService: PlatformSettingsService,
     @InjectRepository(Tenant)
     private readonly tenantRepo: Repository<Tenant>,
   ) {}
@@ -73,18 +66,43 @@ export class SignupController {
       TenantOnboardingActorType.SELF_SERVE,
     );
 
-    await this.provisioningQueue.add(TENANT_PROVISIONING_JOB, {
-      tenantId: tenant.id,
-      subdomain: dto.subdomain,
-      churchName: dto.churchName,
+    const pendingParams = {
       adminFirstname: dto.adminFirstname,
       adminLastname: dto.adminLastname,
       adminEmail: dto.adminEmail,
       planId: 'free',
       parentTenantId: resolvedInvite?.parentTenantId,
       sponsoredPlanId: resolvedInvite?.sponsoredPlanId ?? undefined,
-      actorType: TenantOnboardingActorType.SELF_SERVE,
       branchInviteToken: dto.branchInviteToken,
+    };
+
+    // A branch invite is already a vetted, invitation-only path (a parent
+    // tenant's own admin had to generate the token) — gating it behind a
+    // second, generic approval step would be redundant friction on top of
+    // vetting that already happened. Only a cold, anonymous signup is held.
+    if (
+      !resolvedInvite &&
+      (await this.settingsService.getSelfServeRequiresApproval())
+    ) {
+      await this.provisioningService.holdForApproval(tenant, pendingParams);
+      return {
+        tenant: {
+          id: tenant.id,
+          subdomain: tenant.subdomain,
+          name: tenant.name,
+          onboardingStatus: 'AWAITING_APPROVAL',
+        },
+        message:
+          "Thanks for signing up! Your request is being reviewed by our team — we'll email you once it's approved.",
+      };
+    }
+
+    await this.provisioningService.enqueueProvisioning({
+      tenantId: tenant.id,
+      subdomain: dto.subdomain,
+      churchName: dto.churchName,
+      ...pendingParams,
+      actorType: TenantOnboardingActorType.SELF_SERVE,
     });
 
     return {
